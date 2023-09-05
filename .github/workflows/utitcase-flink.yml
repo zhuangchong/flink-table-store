@@ -26,6 +26,7 @@ on:
 
 env:
   JDK_VERSION: 8
+  MAVEN_OPTS: -server -Xmx4096m
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.number || github.run_id }}
@@ -36,8 +37,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout code
         uses: actions/checkout@v2
+
       - name: Cache local Maven repository
         id: cache-maven
         uses: actions/cache@v3
@@ -46,19 +49,21 @@ jobs:
           key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
           restore-keys: |
             ${{ runner.os }}-maven-
+
       - name: Set up JDK ${{ env.JDK_VERSION }}
         if: steps.cache-maven.outputs.exit-code == 0
         uses: actions/setup-java@v2
         with:
           java-version: ${{ env.JDK_VERSION }}
           distribution: 'adopt'
-      - name: Build and Test
+
+      - name: Build
+        run: mvn -T 1C -B -e clean install -DskipTests
+
+      - name: Test
         timeout-minutes: 80
         run: |
           . .github/workflows/utils.sh
           jvm_timezone=$(random_timezone)
           echo "JVM timezone is set to $jvm_timezone"
-          mvn -T 1C -B clean install -DskipTests
-          mvn -T 1C -B clean install -pl 'org.apache.paimon:paimon-flink-common' -Duser.timezone=$jvm_timezone
-        env:
-          MAVEN_OPTS: -Xmx4096m
+          mvn -T 1C -B -e clean install -pl 'org.apache.paimon:paimon-flink-common' -Duser.timezone=$jvm_timezone
