@@ -36,7 +36,7 @@ class BinaryToBinaryCastRule extends AbstractCastRule<byte[], byte[]> {
     }
 
     @Override
-    public CastExecutor<byte[], byte[]> create(DataType inputType, DataType targetType) {
+    public CastExecutor<byte[], byte[]> create(DataType inputType1, DataType targetType) {
         return value -> BinaryStringUtils.toBinaryString(value, targetType);
     }
 }
