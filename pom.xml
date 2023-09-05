@@ -884,6 +884,7 @@ under the License.
                             <artifactId>paimon-ci-tools</artifactId>
                             <version>${paimon.shade.version}</version>
                         </dependency>
+
                     </dependencies>
                 </plugin>
 
