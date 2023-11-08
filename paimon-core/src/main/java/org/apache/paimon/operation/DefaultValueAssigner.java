@@ -57,7 +57,7 @@ public class DefaultValueAssigner {
 
     private DefaultValueAssigner(Map<String, String> defaultValues, RowType rowType) {
         this.defaultValues = defaultValues;
-        this.needToAssign = defaultValues.size() > 0;
+        this.needToAssign = !defaultValues.isEmpty();
         this.rowType = rowType;
     }
 
@@ -133,17 +133,17 @@ public class DefaultValueAssigner {
                             return Optional.of(predicate);
                         };
 
-                ArrayList<Predicate> filterWithouDefaultValueField = new ArrayList<>();
+                ArrayList<Predicate> filterWithoutDefaultValueField = new ArrayList<>();
 
                 List<Predicate> predicates = PredicateBuilder.splitAnd(filters);
                 for (Predicate predicate : predicates) {
                     predicate
                             .visit(deletePredicateWithFieldNameVisitor)
-                            .ifPresent(filterWithouDefaultValueField::add);
+                            .ifPresent(filterWithoutDefaultValueField::add);
                 }
 
-                if (!filterWithouDefaultValueField.isEmpty()) {
-                    result = PredicateBuilder.and(filterWithouDefaultValueField);
+                if (!filterWithoutDefaultValueField.isEmpty()) {
+                    result = PredicateBuilder.and(filterWithoutDefaultValueField);
                 } else {
                     result = null;
                 }

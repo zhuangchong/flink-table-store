@@ -19,7 +19,7 @@
 package org.apache.paimon.flink.action.cdc.mysql.schema;
 
 import org.apache.paimon.flink.action.cdc.TypeMapping;
-import org.apache.paimon.flink.action.cdc.mysql.MySqlTypeUtils;
+import org.apache.paimon.flink.action.cdc.postgres.PostgresTypeUtils;
 import org.apache.paimon.flink.sink.cdc.UpdatedDataFieldsProcessFunction;
 import org.apache.paimon.schema.Schema;
 import org.apache.paimon.types.DataField;
@@ -79,7 +79,7 @@ public class MySqlSchemaUtils {
                         typeMapping.containsMode(TO_NULLABLE)
                                 || isNullableColumn(rs.getString("IS_NULLABLE"));
                 DataType paimonType =
-                        MySqlTypeUtils.toDataType(fieldType, precision, scale, typeMapping)
+                        PostgresTypeUtils.toDataType(fieldType, precision, scale, typeMapping)
                                 .copy(isNullable);
 
                 fieldName =
