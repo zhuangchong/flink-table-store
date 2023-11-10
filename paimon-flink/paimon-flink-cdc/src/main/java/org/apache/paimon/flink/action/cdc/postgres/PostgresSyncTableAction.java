@@ -28,8 +28,7 @@ import org.apache.paimon.flink.action.cdc.CdcActionCommonUtils;
 import org.apache.paimon.flink.action.cdc.CdcMetadataConverter;
 import org.apache.paimon.flink.action.cdc.ComputedColumn;
 import org.apache.paimon.flink.action.cdc.TypeMapping;
-import org.apache.paimon.flink.action.cdc.mysql.MySqlRecordParser;
-import org.apache.paimon.flink.action.cdc.mysql.schema.MySqlSchemasInfo;
+import org.apache.paimon.flink.action.cdc.mysql.schema.JdbcSchemasInfo;
 import org.apache.paimon.flink.action.cdc.mysql.schema.MySqlTableInfo;
 import org.apache.paimon.flink.sink.cdc.CdcSinkBuilder;
 import org.apache.paimon.flink.sink.cdc.EventParser;
@@ -38,12 +37,17 @@ import org.apache.paimon.flink.sink.cdc.RichCdcMultiplexRecordEventParser;
 import org.apache.paimon.schema.Schema;
 import org.apache.paimon.table.FileStoreTable;
 
-import com.ververica.cdc.connectors.postgres.source.PostgresSourceBuilder;
+import com.ververica.cdc.connectors.base.source.jdbc.JdbcIncrementalSource;
 import com.ververica.cdc.connectors.postgres.source.config.PostgresSourceOptions;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.configuration.Configuration;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
 import java.util.function.Predicate;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -161,18 +165,18 @@ public class PostgresSyncTableAction extends ActionBase {
             validateCaseInsensitive();
         }
 
-        MySqlSchemasInfo mySqlSchemasInfo =
+        JdbcSchemasInfo jdbcSchemasInfo =
                 PostgresActionUtils.getPostgresTableInfos(
                         postgresConfig,
                         monitorTablePredication(),
                         new ArrayList<>(),
                         typeMapping,
                         caseSensitive);
-        validateMySqlTableInfos(mySqlSchemasInfo);
+        validateMySqlTableInfos(jdbcSchemasInfo);
 
         catalog.createDatabase(database, true);
 
-        MySqlTableInfo tableInfo = mySqlSchemasInfo.mergeAll();
+        MySqlTableInfo tableInfo = jdbcSchemasInfo.mergeAll();
         Identifier identifier = new Identifier(database, table);
         List<ComputedColumn> computedColumns =
                 buildComputedColumns(computedColumnArgs, tableInfo.schema().fields());
@@ -218,16 +222,20 @@ public class PostgresSyncTableAction extends ActionBase {
             fileStoreTable = (FileStoreTable) catalog.getTable(identifier);
         }
 
-        String tableList =
-                mySqlSchemasInfo.pkTables().stream()
-                        .map(i -> i.getDatabaseName() + "\\." + i.getObjectName())
-                        .collect(Collectors.joining("|"));
-        PostgresSourceBuilder.PostgresIncrementalSource<String> source =
+        String[] tableList =
+                jdbcSchemasInfo.pkTables().stream()
+                        .map(
+                                i ->
+                                        postgresConfig.get(PostgresSourceOptions.SCHEMA_NAME)
+                                                + "."
+                                                + i.getObjectName())
+                        .toArray(String[]::new);
+        JdbcIncrementalSource<String> source =
                 PostgresActionUtils.buildPostgresSource(postgresConfig, tableList);
 
         TypeMapping typeMapping = this.typeMapping;
-        MySqlRecordParser recordParser =
-                new MySqlRecordParser(
+        PostgresRecordParser recordParser =
+                new PostgresRecordParser(
                         postgresConfig,
                         caseSensitive,
                         computedColumns,
@@ -284,8 +292,8 @@ public class PostgresSyncTableAction extends ActionBase {
         }
     }
 
-    private void validateMySqlTableInfos(MySqlSchemasInfo mySqlSchemasInfo) {
-        List<Identifier> nonPkTables = mySqlSchemasInfo.nonPkTables();
+    private void validateMySqlTableInfos(JdbcSchemasInfo jdbcSchemasInfo) {
+        List<Identifier> nonPkTables = jdbcSchemasInfo.nonPkTables();
         checkArgument(
                 nonPkTables.isEmpty(),
                 "Source tables of MySQL table synchronization job cannot contain table "
@@ -294,7 +302,7 @@ public class PostgresSyncTableAction extends ActionBase {
                 nonPkTables.stream().map(Identifier::getFullName).collect(Collectors.joining(",")));
 
         checkArgument(
-                !mySqlSchemasInfo.pkTables().isEmpty(),
+                !jdbcSchemasInfo.pkTables().isEmpty(),
                 "No table satisfies the given database name and table name.");
     }
 

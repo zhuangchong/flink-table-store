@@ -28,7 +28,7 @@ import org.apache.paimon.flink.action.cdc.CdcActionCommonUtils;
 import org.apache.paimon.flink.action.cdc.CdcMetadataConverter;
 import org.apache.paimon.flink.action.cdc.ComputedColumn;
 import org.apache.paimon.flink.action.cdc.TypeMapping;
-import org.apache.paimon.flink.action.cdc.mysql.schema.MySqlSchemasInfo;
+import org.apache.paimon.flink.action.cdc.mysql.schema.JdbcSchemasInfo;
 import org.apache.paimon.flink.action.cdc.mysql.schema.MySqlTableInfo;
 import org.apache.paimon.flink.sink.cdc.CdcSinkBuilder;
 import org.apache.paimon.flink.sink.cdc.EventParser;
@@ -167,18 +167,18 @@ public class MySqlSyncTableAction extends ActionBase {
             validateCaseInsensitive();
         }
 
-        MySqlSchemasInfo mySqlSchemasInfo =
+        JdbcSchemasInfo jdbcSchemasInfo =
                 MySqlActionUtils.getMySqlTableInfos(
                         mySqlConfig,
                         monitorTablePredication(),
                         new ArrayList<>(),
                         typeMapping,
                         caseSensitive);
-        validateMySqlTableInfos(mySqlSchemasInfo);
+        validateMySqlTableInfos(jdbcSchemasInfo);
 
         catalog.createDatabase(database, true);
 
-        MySqlTableInfo tableInfo = mySqlSchemasInfo.mergeAll();
+        MySqlTableInfo tableInfo = jdbcSchemasInfo.mergeAll();
         Identifier identifier = new Identifier(database, table);
         List<ComputedColumn> computedColumns =
                 buildComputedColumns(computedColumnArgs, tableInfo.schema().fields());
@@ -225,7 +225,7 @@ public class MySqlSyncTableAction extends ActionBase {
         }
 
         String tableList =
-                mySqlSchemasInfo.pkTables().stream()
+                jdbcSchemasInfo.pkTables().stream()
                         .map(i -> i.getDatabaseName() + "\\." + i.getObjectName())
                         .collect(Collectors.joining("|"));
         MySqlSource<String> source = MySqlActionUtils.buildMySqlSource(mySqlConfig, tableList);
@@ -289,8 +289,8 @@ public class MySqlSyncTableAction extends ActionBase {
         }
     }
 
-    private void validateMySqlTableInfos(MySqlSchemasInfo mySqlSchemasInfo) {
-        List<Identifier> nonPkTables = mySqlSchemasInfo.nonPkTables();
+    private void validateMySqlTableInfos(JdbcSchemasInfo jdbcSchemasInfo) {
+        List<Identifier> nonPkTables = jdbcSchemasInfo.nonPkTables();
         checkArgument(
                 nonPkTables.isEmpty(),
                 "Source tables of MySQL table synchronization job cannot contain table "
@@ -299,7 +299,7 @@ public class MySqlSyncTableAction extends ActionBase {
                 nonPkTables.stream().map(Identifier::getFullName).collect(Collectors.joining(",")));
 
         checkArgument(
-                !mySqlSchemasInfo.pkTables().isEmpty(),
+                !jdbcSchemasInfo.pkTables().isEmpty(),
                 "No table satisfies the given database name and table name.");
     }
 

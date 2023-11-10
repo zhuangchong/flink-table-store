@@ -20,8 +20,8 @@ package org.apache.paimon.flink.action.cdc.mysql;
 
 import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.flink.action.cdc.TypeMapping;
-import org.apache.paimon.flink.action.cdc.mysql.schema.MySqlSchemaUtils;
-import org.apache.paimon.flink.action.cdc.mysql.schema.MySqlSchemasInfo;
+import org.apache.paimon.flink.action.cdc.mysql.schema.JdbcSchemaUtils;
+import org.apache.paimon.flink.action.cdc.mysql.schema.JdbcSchemasInfo;
 import org.apache.paimon.schema.Schema;
 
 import com.ververica.cdc.connectors.mysql.source.MySqlSource;
@@ -85,7 +85,7 @@ public class MySqlActionUtils {
                 mySqlConfig.get(MySqlSourceOptions.PASSWORD));
     }
 
-    public static MySqlSchemasInfo getMySqlTableInfos(
+    public static JdbcSchemasInfo getMySqlTableInfos(
             Configuration mySqlConfig,
             Predicate<String> monitorTablePredication,
             List<Identifier> excludedTables,
@@ -94,7 +94,7 @@ public class MySqlActionUtils {
             throws Exception {
         Pattern databasePattern =
                 Pattern.compile(mySqlConfig.get(MySqlSourceOptions.DATABASE_NAME));
-        MySqlSchemasInfo mySqlSchemasInfo = new MySqlSchemasInfo();
+        JdbcSchemasInfo jdbcSchemasInfo = new JdbcSchemasInfo();
         try (Connection conn =
                 MySqlActionUtils.getConnection(
                         mySqlConfig, typeMapping.containsMode(TINYINT1_NOT_BOOL))) {
@@ -109,7 +109,7 @@ public class MySqlActionUtils {
                                 String tableName = tables.getString("TABLE_NAME");
                                 String tableComment = tables.getString("REMARKS");
                                 Schema schema =
-                                        MySqlSchemaUtils.buildSchema(
+                                        JdbcSchemaUtils.buildSchema(
                                                 metaData,
                                                 databaseName,
                                                 tableName,
@@ -118,7 +118,7 @@ public class MySqlActionUtils {
                                                 caseSensitive);
                                 Identifier identifier = Identifier.create(databaseName, tableName);
                                 if (monitorTablePredication.test(tableName)) {
-                                    mySqlSchemasInfo.addSchema(identifier, schema);
+                                    jdbcSchemasInfo.addSchema(identifier, schema);
                                 } else {
                                     excludedTables.add(identifier);
                                 }
@@ -128,7 +128,7 @@ public class MySqlActionUtils {
                 }
             }
         }
-        return mySqlSchemasInfo;
+        return jdbcSchemasInfo;
     }
 
     public static MySqlSource<String> buildMySqlSource(

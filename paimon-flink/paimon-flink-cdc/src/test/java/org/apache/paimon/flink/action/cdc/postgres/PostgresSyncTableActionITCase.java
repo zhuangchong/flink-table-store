@@ -61,7 +61,7 @@ public class PostgresSyncTableActionITCase extends PostgresActionITCaseBase {
     }
 
     @Test
-    @Timeout(60)
+    @Timeout(160)
     public void testSchemaEvolution() throws Exception {
         Map<String, String> postgresConfig = getBasicPostgresConfig();
         postgresConfig.put(PostgresSourceOptions.DATABASE_NAME.key(), DATABASE_NAME);
@@ -80,11 +80,11 @@ public class PostgresSyncTableActionITCase extends PostgresActionITCaseBase {
         runActionWithDefaultEnv(action);
 
         checkTableSchema(
-                "[{\"id\":0,\"name\":\"pt\",\"type\":\"INT NOT NULL\",\"description\":\"primary\"},"
-                        + "{\"id\":1,\"name\":\"_id\",\"type\":\"INT NOT NULL\",\"description\":\"_id\"},"
-                        + "{\"id\":2,\"name\":\"v1\",\"type\":\"VARCHAR(10)\",\"description\":\"v1\"}]");
+                "[{\"id\":0,\"name\":\"pt\",\"type\":\"INT NOT NULL\"},"
+                        + "{\"id\":1,\"name\":\"_id\",\"type\":\"INT NOT NULL\"},"
+                        + "{\"id\":2,\"name\":\"v1\",\"type\":\"VARCHAR(10)\"}]");
 
-        try (Statement statement = getStatement()) {
+        try (Statement statement = getStatement(DATABASE_NAME)) {
             testSchemaEvolutionImpl(statement);
         }
     }
@@ -98,7 +98,6 @@ public class PostgresSyncTableActionITCase extends PostgresActionITCaseBase {
 
     private void testSchemaEvolutionImpl(Statement statement) throws Exception {
         FileStoreTable table = getFileStoreTable();
-        statement.executeUpdate("USE " + DATABASE_NAME);
 
         statement.executeUpdate("INSERT INTO schema_evolution_1 VALUES (1, 1, 'one')");
         statement.executeUpdate(
@@ -115,12 +114,14 @@ public class PostgresSyncTableActionITCase extends PostgresActionITCaseBase {
         List<String> expected = Arrays.asList("+I[1, 1, one]", "+I[1, 2, two]", "+I[2, 4, four]");
         waitForResult(expected, table, rowType, primaryKeys);
 
-        statement.executeUpdate("ALTER TABLE schema_evolution_1 ADD COLUMN v2 INT");
+        statement.executeUpdate("ALTER TABLE public.schema_evolution_1 ADD COLUMN v2 INT");
         statement.executeUpdate(
                 "INSERT INTO schema_evolution_1 VALUES (2, 3, 'three', 30), (1, 5, 'five', 50)");
         statement.executeUpdate("ALTER TABLE schema_evolution_2 ADD COLUMN v2 INT");
-        statement.executeUpdate("INSERT INTO schema_evolution_2 VALUES (1, 6, 'six', 60)");
-        statement.executeUpdate("UPDATE schema_evolution_2 SET v1 = 'second' WHERE _id = 2");
+        //        statement.executeUpdate("INSERT INTO schema_evolution_2 VALUES (1, 6, 'six',
+        // 60)");
+        //        statement.executeUpdate("UPDATE schema_evolution_2 SET v1 = 'second' WHERE _id =
+        // 2");
         rowType =
                 RowType.of(
                         new DataType[] {

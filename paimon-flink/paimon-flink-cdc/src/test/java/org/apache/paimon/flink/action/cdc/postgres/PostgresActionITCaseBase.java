@@ -20,6 +20,7 @@ package org.apache.paimon.flink.action.cdc.postgres;
 
 import org.apache.paimon.flink.action.cdc.CdcActionITCaseBase;
 
+import com.ververica.cdc.connectors.postgres.source.PostgresConnectionPoolFactory;
 import com.ververica.cdc.connectors.postgres.source.config.PostgresSourceOptions;
 import org.apache.flink.api.java.utils.MultipleParameterTool;
 import org.junit.jupiter.api.AfterAll;
@@ -33,7 +34,12 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
 import java.util.stream.Stream;
 
 /** Base test class for {@link org.apache.paimon.flink.action.Action}s related to MySQL. */
@@ -53,6 +59,7 @@ public class PostgresActionITCaseBase extends CdcActionITCaseBase {
 
     protected static final PostgreSQLContainer POSTGRES_CONTAINER =
             new PostgreSQLContainer(PG_IMAGE)
+                    .withDatabaseName(DEFAULT_DB)
                     .withUsername(USER)
                     .withPassword(PASSWORD)
                     .withEnv("TZ", "America/Los_Angeles")
@@ -76,6 +83,21 @@ public class PostgresActionITCaseBase extends CdcActionITCaseBase {
         LOG.info("Stopping containers...");
         POSTGRES_CONTAINER.stop();
         LOG.info("Containers are stopped.");
+    }
+
+    protected Statement getStatement(String databaseName) throws SQLException {
+        String jdbcUrl =
+                String.format(
+                        PostgresConnectionPoolFactory.JDBC_URL_PATTERN,
+                        POSTGRES_CONTAINER.getHost(),
+                        POSTGRES_CONTAINER.getDatabasePort(),
+                        databaseName);
+        Connection conn =
+                DriverManager.getConnection(
+                        jdbcUrl,
+                        POSTGRES_CONTAINER.getUsername(),
+                        POSTGRES_CONTAINER.getPassword());
+        return conn.createStatement();
     }
 
     protected Statement getStatement() throws SQLException {

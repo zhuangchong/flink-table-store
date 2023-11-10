@@ -43,8 +43,7 @@ public class AllMergedMySqlTableInfo implements MySqlTableInfo {
     }
 
     public AllMergedMySqlTableInfo merge(Identifier otherTableId, Schema other) {
-        schema =
-                MySqlSchemaUtils.mergeSchema(location(), schema, otherTableId.getFullName(), other);
+        schema = JdbcSchemaUtils.mergeSchema(location(), schema, otherTableId.getFullName(), other);
         fromTables.add(otherTableId);
         return this;
     }

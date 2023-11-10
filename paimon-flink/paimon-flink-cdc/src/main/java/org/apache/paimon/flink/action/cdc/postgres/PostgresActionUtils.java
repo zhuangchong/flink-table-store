@@ -20,11 +20,12 @@ package org.apache.paimon.flink.action.cdc.postgres;
 
 import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.flink.action.cdc.TypeMapping;
-import org.apache.paimon.flink.action.cdc.mysql.schema.MySqlSchemaUtils;
-import org.apache.paimon.flink.action.cdc.mysql.schema.MySqlSchemasInfo;
+import org.apache.paimon.flink.action.cdc.mysql.schema.JdbcSchemaUtils;
+import org.apache.paimon.flink.action.cdc.mysql.schema.JdbcSchemasInfo;
 import org.apache.paimon.schema.Schema;
 
 import com.ververica.cdc.connectors.base.options.StartupOptions;
+import com.ververica.cdc.connectors.base.source.jdbc.JdbcIncrementalSource;
 import com.ververica.cdc.connectors.postgres.source.PostgresSourceBuilder;
 import com.ververica.cdc.connectors.postgres.source.PostgresSourceBuilder.PostgresIncrementalSource;
 import com.ververica.cdc.connectors.postgres.source.config.PostgresSourceOptions;
@@ -64,7 +65,7 @@ public class PostgresActionUtils {
                 postgresConfig.get(PostgresSourceOptions.PASSWORD));
     }
 
-    public static MySqlSchemasInfo getPostgresTableInfos(
+    public static JdbcSchemasInfo getPostgresTableInfos(
             Configuration postgresConfig,
             Predicate<String> monitorTablePredication,
             List<Identifier> excludedTables,
@@ -74,7 +75,7 @@ public class PostgresActionUtils {
         Pattern databasePattern =
                 Pattern.compile(postgresConfig.get(PostgresSourceOptions.DATABASE_NAME));
         String schemaName = postgresConfig.get(PostgresSourceOptions.SCHEMA_NAME);
-        MySqlSchemasInfo mySqlSchemasInfo = new MySqlSchemasInfo();
+        JdbcSchemasInfo jdbcSchemasInfo = new JdbcSchemasInfo();
         try (Connection conn = PostgresActionUtils.getConnection(postgresConfig)) {
             DatabaseMetaData metaData = conn.getMetaData();
             try (ResultSet schemas = metaData.getCatalogs()) {
@@ -89,7 +90,7 @@ public class PostgresActionUtils {
                                 String tableName = tables.getString("TABLE_NAME");
                                 String tableComment = tables.getString("REMARKS");
                                 Schema schema =
-                                        MySqlSchemaUtils.buildSchema(
+                                        JdbcSchemaUtils.buildSchema(
                                                 metaData,
                                                 databaseName,
                                                 tableName,
@@ -98,7 +99,7 @@ public class PostgresActionUtils {
                                                 caseSensitive);
                                 Identifier identifier = Identifier.create(databaseName, tableName);
                                 if (monitorTablePredication.test(tableName)) {
-                                    mySqlSchemasInfo.addSchema(identifier, schema);
+                                    jdbcSchemasInfo.addSchema(identifier, schema);
                                 } else {
                                     excludedTables.add(identifier);
                                 }
@@ -108,22 +109,21 @@ public class PostgresActionUtils {
                 }
             }
         }
-        return mySqlSchemasInfo;
+        return jdbcSchemasInfo;
     }
 
-    public static PostgresIncrementalSource<String> buildPostgresSource(
-            Configuration postgresConfig, String tableList) {
+    public static JdbcIncrementalSource<String> buildPostgresSource(
+            Configuration postgresConfig, String[] tableList) {
         validatePostgresConfig(postgresConfig);
         PostgresSourceBuilder<String> sourceBuilder = PostgresIncrementalSource.builder();
 
         String schemaName = postgresConfig.get(PostgresSourceOptions.SCHEMA_NAME);
-        String tableName = postgresConfig.get(PostgresSourceOptions.TABLE_NAME);
         sourceBuilder
                 .hostname(postgresConfig.get(PostgresSourceOptions.HOSTNAME))
                 .port(postgresConfig.get(PostgresSourceOptions.PG_PORT))
                 .database(postgresConfig.get(PostgresSourceOptions.DATABASE_NAME))
                 .schemaList(schemaName)
-                .tableList(schemaName + "." + tableName)
+                .tableList(tableList)
                 .slotName(postgresConfig.get(PostgresSourceOptions.SLOT_NAME))
                 .username(postgresConfig.get(PostgresSourceOptions.USERNAME))
                 .password(postgresConfig.get(PostgresSourceOptions.PASSWORD));

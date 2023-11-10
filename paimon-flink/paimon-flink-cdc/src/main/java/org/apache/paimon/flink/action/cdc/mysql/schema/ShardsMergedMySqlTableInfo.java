@@ -57,8 +57,7 @@ public class ShardsMergedMySqlTableInfo implements MySqlTableInfo {
                 otherTableId.getObjectName(),
                 tableName);
 
-        schema =
-                MySqlSchemaUtils.mergeSchema(location(), schema, otherTableId.getFullName(), other);
+        schema = JdbcSchemaUtils.mergeSchema(location(), schema, otherTableId.getFullName(), other);
         fromDatabases.add(otherTableId.getDatabaseName());
         return this;
     }

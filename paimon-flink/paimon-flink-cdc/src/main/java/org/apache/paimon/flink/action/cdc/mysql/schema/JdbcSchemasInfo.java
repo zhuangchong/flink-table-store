@@ -27,13 +27,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-/** Utility class to manage MySQL tables and their schemas. */
-public class MySqlSchemasInfo {
+/** Utility class to manage tables and their schemas. */
+public class JdbcSchemasInfo {
 
     private final Map<Identifier, Schema> pkTableSchemas;
     private final Map<Identifier, Schema> nonPkTableSchemas;
 
-    public MySqlSchemasInfo() {
+    public JdbcSchemasInfo() {
         this.pkTableSchemas = new HashMap<>();
         this.nonPkTableSchemas = new HashMap<>();
     }

@@ -28,7 +28,7 @@ import org.apache.paimon.flink.action.cdc.CdcActionCommonUtils;
 import org.apache.paimon.flink.action.cdc.CdcMetadataConverter;
 import org.apache.paimon.flink.action.cdc.TableNameConverter;
 import org.apache.paimon.flink.action.cdc.TypeMapping;
-import org.apache.paimon.flink.action.cdc.mysql.schema.MySqlSchemasInfo;
+import org.apache.paimon.flink.action.cdc.mysql.schema.JdbcSchemasInfo;
 import org.apache.paimon.flink.action.cdc.mysql.schema.MySqlTableInfo;
 import org.apache.paimon.flink.sink.cdc.EventParser;
 import org.apache.paimon.flink.sink.cdc.FlinkCdcSyncDatabaseSinkBuilder;
@@ -207,7 +207,7 @@ public class MySqlSyncDatabaseAction extends ActionBase {
         Pattern includingPattern = Pattern.compile(includingTables);
         Pattern excludingPattern =
                 excludingTables == null ? null : Pattern.compile(excludingTables);
-        MySqlSchemasInfo mySqlSchemasInfo =
+        JdbcSchemasInfo jdbcSchemasInfo =
                 MySqlActionUtils.getMySqlTableInfos(
                         mySqlConfig,
                         tableName ->
@@ -216,8 +216,8 @@ public class MySqlSyncDatabaseAction extends ActionBase {
                         typeMapping,
                         caseSensitive);
 
-        logNonPkTables(mySqlSchemasInfo.nonPkTables());
-        List<MySqlTableInfo> mySqlTableInfos = mySqlSchemasInfo.toMySqlTableInfos(mergeShards);
+        logNonPkTables(jdbcSchemasInfo.nonPkTables());
+        List<MySqlTableInfo> mySqlTableInfos = jdbcSchemasInfo.toMySqlTableInfos(mergeShards);
 
         checkArgument(
                 mySqlTableInfos.size() > 0,

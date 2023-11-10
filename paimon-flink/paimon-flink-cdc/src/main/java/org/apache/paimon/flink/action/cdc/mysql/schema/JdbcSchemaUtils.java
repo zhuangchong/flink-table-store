@@ -44,10 +44,10 @@ import static org.apache.paimon.flink.action.cdc.CdcActionCommonUtils.columnDupl
 import static org.apache.paimon.flink.action.cdc.TypeMapping.TypeMappingMode.TO_NULLABLE;
 import static org.apache.paimon.utils.StringUtils.caseSensitiveConversion;
 
-/** Utility class to load MySQL table schema with JDBC. */
-public class MySqlSchemaUtils {
+/** Utility class to load table schema with JDBC. */
+public class JdbcSchemaUtils {
 
-    private static final Logger LOG = LoggerFactory.getLogger(MySqlSchemaUtils.class);
+    private static final Logger LOG = LoggerFactory.getLogger(JdbcSchemaUtils.class);
 
     public static Schema buildSchema(
             DatabaseMetaData metaData,

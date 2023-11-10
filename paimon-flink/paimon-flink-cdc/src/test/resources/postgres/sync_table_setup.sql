@@ -18,36 +18,45 @@
 -- to prevent other clients accessing the log from other machines. For example, 'replicator'@'follower.acme.com'.
 -- However, in this database we'll grant the test user 'paimonuser' all privileges:
 --
--- GRANT ALL PRIVILEGES ON *.* TO 'paimonuser'@'%';
 
 -- ################################################################################
 --  PostgresSyncTableActionITCase
 -- ################################################################################
 
 CREATE DATABASE paimon_sync_table;
+
 \c paimon_sync_table;
 
 CREATE TABLE schema_evolution_1 (
-                                    pt INT,
-                                    _id INT,
-                                    v1 VARCHAR(10),
-                                    PRIMARY KEY (_id)
+    pt INT,
+    _id INT,
+    v1 VARCHAR(10),
+    PRIMARY KEY (_id)
 );
+
+ALTER TABLE schema_evolution_1
+    REPLICA IDENTITY FULL;
 
 CREATE TABLE schema_evolution_2 (
-                                    pt INT,
-                                    _id INT,
-                                    v1 VARCHAR(10),
-                                    PRIMARY KEY (_id)
+    pt INT,
+    _id INT,
+    v1 VARCHAR(10),
+    PRIMARY KEY (_id)
 );
 
+ALTER TABLE schema_evolution_2
+    REPLICA IDENTITY FULL;
+
 CREATE TABLE schema_evolution_multiple (
-                                           _id INT,
-                                           v1 VARCHAR(10),
-                                           v2 INT,
-                                           v3 VARCHAR(10),
-                                           PRIMARY KEY (_id)
+   _id INT,
+   v1 VARCHAR(10),
+   v2 INT,
+   v3 VARCHAR(10),
+   PRIMARY KEY (_id)
 );
+
+ALTER TABLE schema_evolution_multiple
+    REPLICA IDENTITY FULL;
 
 -- CREATE TABLE all_types_table (
 --     _id INT,
