@@ -209,7 +209,7 @@ public class PrimaryKeyPartialLookupTable implements LookupTable {
         @Override
         public InternalRow lookup(BinaryRow partition, int bucket, InternalRow key)
                 throws IOException {
-            return tableQuery.lookup(partition, bucket, key);
+            return tableQuery.lookup(partition, bucket, key).join();
         }
 
         @Override
@@ -252,7 +252,7 @@ public class PrimaryKeyPartialLookupTable implements LookupTable {
         @Override
         public InternalRow lookup(BinaryRow partition, int bucket, InternalRow key)
                 throws IOException {
-            return tableQuery.lookup(partition, bucket, key);
+            return tableQuery.lookup(partition, bucket, key).join();
         }
 
         @Override

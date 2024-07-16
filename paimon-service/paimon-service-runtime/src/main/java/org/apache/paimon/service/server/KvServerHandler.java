@@ -19,7 +19,6 @@
 package org.apache.paimon.service.server;
 
 import org.apache.paimon.data.BinaryRow;
-import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.data.serializer.InternalRowSerializer;
 import org.apache.paimon.service.exceptions.UnknownPartitionBucketException;
 import org.apache.paimon.service.messages.KvRequest;
@@ -33,6 +32,8 @@ import org.apache.paimon.utils.Preconditions;
 
 import org.apache.paimon.shade.netty4.io.netty.channel.ChannelHandler;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import static org.apache.paimon.table.sink.ChannelComputer.select;
@@ -88,27 +89,41 @@ public class KvServerHandler extends AbstractServerHandler<KvRequest, KvResponse
             return responseFuture;
         }
 
-        try {
-            BinaryRow[] keys = request.keys();
-            BinaryRow[] values = new BinaryRow[keys.length];
-            for (int i = 0; i < values.length; i++) {
-                InternalRow value =
-                        this.lookup.lookup(request.partition(), request.bucket(), keys[i]);
-                if (value != null) {
-                    values[i] = valueSerializer.toBinaryRow(value).copy();
-                }
-            }
-            responseFuture.complete(new KvResponse(values));
-            return responseFuture;
-        } catch (Throwable t) {
-            String errMsg =
-                    "Error while processing request with ID "
-                            + requestId
-                            + ". Caused by: "
-                            + ExceptionUtils.stringifyException(t);
-            responseFuture.completeExceptionally(new RuntimeException(errMsg));
-            return responseFuture;
+        BinaryRow[] keys = request.keys();
+        List<CompletableFuture<BinaryRow>> futures = new ArrayList<>(keys.length);
+        for (BinaryRow key : keys) {
+            CompletableFuture<BinaryRow> future =
+                    this.lookup
+                            .lookup(request.partition(), request.bucket(), key)
+                            .thenApply(
+                                    value ->
+                                            value != null
+                                                    ? valueSerializer.toBinaryRow(value).copy()
+                                                    : null);
+            futures.add(future);
         }
+
+        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                .thenAccept(
+                        ignored -> {
+                            BinaryRow[] values =
+                                    futures.stream()
+                                            .map(CompletableFuture::join)
+                                            .toArray(BinaryRow[]::new);
+                            responseFuture.complete(new KvResponse(values));
+                        })
+                .exceptionally(
+                        e -> {
+                            String errMsg =
+                                    "Error while processing request with ID "
+                                            + requestId
+                                            + ". Caused by: "
+                                            + ExceptionUtils.stringifyException(e);
+                            responseFuture.completeExceptionally(new RuntimeException(errMsg));
+                            return null;
+                        });
+
+        return responseFuture;
     }
 
     @Override

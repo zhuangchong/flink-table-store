@@ -37,7 +37,6 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
 
 import static org.apache.paimon.service.ServiceManager.PRIMARY_KEY_LOOKUP;
 
@@ -62,33 +61,25 @@ public class RemoteTableQuery implements TableQuery {
         return table.store().newServiceManager().service(PRIMARY_KEY_LOOKUP).isPresent();
     }
 
-    @Nullable
     @Override
-    public InternalRow lookup(BinaryRow partition, int bucket, InternalRow key) throws IOException {
-        BinaryRow row;
-        try {
-            row =
-                    client.getValues(
-                                    partition,
-                                    bucket,
-                                    new BinaryRow[] {keySerializer.toBinaryRow(key)})
-                            .get()[0];
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException(e);
-        } catch (ExecutionException e) {
-            throw new IOException(e.getCause());
-        }
+    public CompletableFuture<InternalRow> lookup(BinaryRow partition, int bucket, InternalRow key) {
+        CompletableFuture<BinaryRow[]> futureRows =
+                client.getValues(
+                        partition, bucket, new BinaryRow[] {keySerializer.toBinaryRow(key)});
 
-        if (projection == null) {
-            return row;
-        }
+        return futureRows.thenApply(
+                rows -> {
+                    BinaryRow row = rows[0];
+                    if (projection == null) {
+                        return row;
+                    }
 
-        if (row == null) {
-            return null;
-        }
+                    if (row == null) {
+                        return null;
+                    }
 
-        return ProjectedRow.from(projection).replaceRow(row);
+                    return ProjectedRow.from(projection).replaceRow(row);
+                });
     }
 
     @Override

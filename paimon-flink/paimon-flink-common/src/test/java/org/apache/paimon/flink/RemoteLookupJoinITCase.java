@@ -75,23 +75,23 @@ public class RemoteLookupJoinITCase extends CatalogITCaseBase {
         sql("INSERT INTO DIM VALUES (1, 11), (2, 22), (3, 33), (4, 44)");
         Thread.sleep(2000);
 
-        assertThat(query.lookup(row(), 0, row(1)))
+        assertThat(query.lookup(row(), 0, row(1)).get())
                 .isNotNull()
                 .extracting(r -> r.getInt(1))
                 .isEqualTo(11);
-        assertThat(query.lookup(row(), 0, row(2)))
+        assertThat(query.lookup(row(), 0, row(2)).get())
                 .isNotNull()
                 .extracting(r -> r.getInt(1))
                 .isEqualTo(22);
-        assertThat(query.lookup(row(), 1, row(3)))
+        assertThat(query.lookup(row(), 1, row(3)).get())
                 .isNotNull()
                 .extracting(r -> r.getInt(1))
                 .isEqualTo(33);
-        assertThat(query.lookup(row(), 0, row(4)))
+        assertThat(query.lookup(row(), 0, row(4)).get())
                 .isNotNull()
                 .extracting(r -> r.getInt(1))
                 .isEqualTo(44);
-        assertThat(query.lookup(row(), 0, row(5))).isNull();
+        assertThat(query.lookup(row(), 0, row(5)).get()).isNull();
 
         service.close();
         query.cancel().get();
@@ -145,7 +145,7 @@ public class RemoteLookupJoinITCase extends CatalogITCaseBase {
         sql("INSERT INTO DIM VALUES (1, 11), (2, 22), (3, 33), (4, 44)");
         Thread.sleep(2000);
 
-        assertThat(query.lookup(row(), 0, row(1)))
+        assertThat(query.lookup(row(), 0, row(1)).get())
                 .isNotNull()
                 .extracting(r -> r.getInt(1))
                 .isEqualTo(11);

@@ -23,10 +23,8 @@ import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.data.serializer.InternalRowSerializer;
 import org.apache.paimon.utils.Projection;
 
-import javax.annotation.Nullable;
-
 import java.io.Closeable;
-import java.io.IOException;
+import java.util.concurrent.CompletableFuture;
 
 /** A query of Table to perform lookup. */
 public interface TableQuery extends Closeable {
@@ -39,6 +37,5 @@ public interface TableQuery extends Closeable {
 
     InternalRowSerializer createValueSerializer();
 
-    @Nullable
-    InternalRow lookup(BinaryRow partition, int bucket, InternalRow key) throws IOException;
+    CompletableFuture<InternalRow> lookup(BinaryRow partition, int bucket, InternalRow key);
 }

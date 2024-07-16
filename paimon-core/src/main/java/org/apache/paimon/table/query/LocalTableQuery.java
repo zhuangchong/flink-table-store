@@ -39,13 +39,13 @@ import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.utils.KeyComparatorSupplier;
 import org.apache.paimon.utils.Preconditions;
 
-import javax.annotation.Nullable;
-
 import java.io.IOException;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.function.Supplier;
 
 import static org.apache.paimon.CoreOptions.MergeEngine.DEDUPLICATE;
@@ -54,7 +54,8 @@ import static org.apache.paimon.lookup.LookupStoreFactory.bfGenerator;
 /** Implementation for {@link TableQuery} for caching data and file in local. */
 public class LocalTableQuery implements TableQuery {
 
-    private final Map<BinaryRow, Map<Integer, LookupLevels<KeyValue>>> tableView;
+    private final ConcurrentMap<BinaryRow, ConcurrentMap<Integer, LookupLevels<KeyValue>>>
+            tableView;
 
     private final CoreOptions options;
 
@@ -70,7 +71,7 @@ public class LocalTableQuery implements TableQuery {
 
     public LocalTableQuery(FileStoreTable table) {
         this.options = table.coreOptions();
-        this.tableView = new HashMap<>();
+        this.tableView = new ConcurrentHashMap<>();
         FileStore<?> tableStore = table.store();
         if (!(tableStore instanceof KeyValueFileStore)) {
             throw new UnsupportedOperationException(
@@ -90,7 +91,7 @@ public class LocalTableQuery implements TableQuery {
         if (options.needLookup()) {
             startLevel = 1;
         } else {
-            if (options.sequenceField().size() > 0) {
+            if (!options.sequenceField().isEmpty()) {
                 throw new UnsupportedOperationException(
                         "Not support sequence field definition, but is: "
                                 + options.sequenceField());
@@ -111,7 +112,7 @@ public class LocalTableQuery implements TableQuery {
             List<DataFileMeta> beforeFiles,
             List<DataFileMeta> dataFiles) {
         LookupLevels<KeyValue> lookupLevels =
-                tableView.computeIfAbsent(partition, k -> new HashMap<>()).get(bucket);
+                tableView.computeIfAbsent(partition, k -> new ConcurrentHashMap<>()).get(bucket);
         if (lookupLevels == null) {
             Preconditions.checkArgument(
                     beforeFiles.isEmpty(),
@@ -150,29 +151,37 @@ public class LocalTableQuery implements TableQuery {
                         options.get(CoreOptions.LOOKUP_CACHE_MAX_DISK_SIZE),
                         bfGenerator(options));
 
-        tableView.computeIfAbsent(partition, k -> new HashMap<>()).put(bucket, lookupLevels);
+        tableView
+                .computeIfAbsent(partition, k -> new ConcurrentHashMap<>())
+                .put(bucket, lookupLevels);
     }
 
-    /** TODO remove synchronized and supports multiple thread to lookup. */
-    @Nullable
     @Override
-    public synchronized InternalRow lookup(BinaryRow partition, int bucket, InternalRow key)
-            throws IOException {
-        Map<Integer, LookupLevels<KeyValue>> buckets = tableView.get(partition);
-        if (buckets == null || buckets.isEmpty()) {
-            return null;
-        }
-        LookupLevels<KeyValue> lookupLevels = buckets.get(bucket);
-        if (lookupLevels == null) {
-            return null;
-        }
+    public CompletableFuture<InternalRow> lookup(BinaryRow partition, int bucket, InternalRow key) {
+        return CompletableFuture.supplyAsync(
+                () -> {
+                    Map<Integer, LookupLevels<KeyValue>> buckets = tableView.get(partition);
+                    if (buckets == null || buckets.isEmpty()) {
+                        return null;
+                    }
+                    LookupLevels<KeyValue> lookupLevels = buckets.get(bucket);
+                    if (lookupLevels == null) {
+                        return null;
+                    }
 
-        KeyValue kv = lookupLevels.lookup(key, startLevel);
-        if (kv == null || kv.valueKind().isRetract()) {
-            return null;
-        } else {
-            return kv.value();
-        }
+                    KeyValue kv;
+                    try {
+                        kv = lookupLevels.lookup(key, startLevel);
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+
+                    if (kv == null || kv.valueKind().isRetract()) {
+                        return null;
+                    } else {
+                        return kv.value();
+                    }
+                });
     }
 
     @Override
@@ -193,7 +202,7 @@ public class LocalTableQuery implements TableQuery {
 
     @Override
     public void close() throws IOException {
-        for (Map.Entry<BinaryRow, Map<Integer, LookupLevels<KeyValue>>> buckets :
+        for (Map.Entry<BinaryRow, ConcurrentMap<Integer, LookupLevels<KeyValue>>> buckets :
                 tableView.entrySet()) {
             for (Map.Entry<Integer, LookupLevels<KeyValue>> bucket :
                     buckets.getValue().entrySet()) {

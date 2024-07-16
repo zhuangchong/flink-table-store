@@ -1595,7 +1595,7 @@ public class PrimaryKeyFileStoreTableTest extends FileStoreTableTestBase {
         query.withIOManager(ioManager);
 
         refreshTableService(query, commitMessages1);
-        InternalRow value = query.lookup(row(1), 0, row(10));
+        InternalRow value = query.lookup(row(1), 0, row(10)).get();
         assertThat(value).isNotNull();
         assertThat(BATCH_ROW_TO_STRING.apply(value))
                 .isEqualTo("1|10|100|binary|varbinary|mapKey:mapVal|multiset");
@@ -1609,19 +1609,19 @@ public class PrimaryKeyFileStoreTableTest extends FileStoreTableTestBase {
 
         refreshTableService(query, commitMessages2);
 
-        value = query.lookup(row(1), 0, row(10));
+        value = query.lookup(row(1), 0, row(10)).get();
         assertThat(value).isNotNull();
         assertThat(BATCH_ROW_TO_STRING.apply(value))
                 .isEqualTo("1|10|200|binary|varbinary|mapKey:mapVal|multiset");
 
-        value = query.lookup(row(3), 0, row(10));
+        value = query.lookup(row(3), 0, row(10)).get();
         assertThat(value).isNotNull();
         assertThat(BATCH_ROW_TO_STRING.apply(value))
                 .isEqualTo("3|10|300|binary|varbinary|mapKey:mapVal|multiset");
 
         // query non value
 
-        value = query.lookup(row(1), 0, row(20));
+        value = query.lookup(row(1), 0, row(20)).get();
         assertThat(value).isNull();
 
         // projection
@@ -1630,7 +1630,7 @@ public class PrimaryKeyFileStoreTableTest extends FileStoreTableTestBase {
         query.withValueProjection(new int[] {2, 1, 0});
         refreshTableService(query, commitMessages1);
         refreshTableService(query, commitMessages2);
-        value = query.lookup(row(1), 0, row(10));
+        value = query.lookup(row(1), 0, row(10)).get();
         assertThat(value).isNotNull();
         Function<InternalRow, String> projectToString =
                 rowData -> rowData.getLong(0) + "|" + rowData.getInt(1) + "|" + rowData.getInt(2);
