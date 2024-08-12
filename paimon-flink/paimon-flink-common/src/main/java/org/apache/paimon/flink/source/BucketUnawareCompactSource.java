@@ -24,6 +24,7 @@ import org.apache.paimon.flink.sink.CompactionTaskTypeInfo;
 import org.apache.paimon.predicate.Predicate;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.source.EndOfScanException;
+import org.apache.paimon.utils.Preconditions;
 
 import org.apache.flink.api.connector.source.Boundedness;
 import org.apache.flink.configuration.Configuration;
@@ -31,6 +32,7 @@ import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.source.RichSourceFunction;
 import org.apache.flink.streaming.api.operators.StreamSource;
+import org.apache.flink.streaming.api.watermark.Watermark;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -59,21 +61,27 @@ public class BucketUnawareCompactSource extends RichSourceFunction<AppendOnlyCom
     private transient AppendOnlyTableCompactionCoordinator compactionCoordinator;
     private transient SourceContext<AppendOnlyCompactionTask> ctx;
     private volatile boolean isRunning = true;
+    private final boolean emitMaxWatermark;
 
     public BucketUnawareCompactSource(
             FileStoreTable table,
             boolean isStreaming,
             long scanInterval,
-            @Nullable Predicate filter) {
+            @Nullable Predicate filter,
+            boolean emitMaxWatermark) {
         this.table = table;
         this.streaming = isStreaming;
         this.scanInterval = scanInterval;
         this.filter = filter;
+        this.emitMaxWatermark = emitMaxWatermark;
     }
 
     @Override
     public void open(Configuration parameters) throws Exception {
         compactionCoordinator = new AppendOnlyTableCompactionCoordinator(table, streaming, filter);
+        Preconditions.checkArgument(
+                this.getRuntimeContext().getNumberOfParallelSubtasks() == 1,
+                "Compaction Operator parallelism in paimon MUST be one.");
     }
 
     @Override
@@ -90,6 +98,10 @@ public class BucketUnawareCompactSource extends RichSourceFunction<AppendOnlyCom
                     List<AppendOnlyCompactionTask> tasks = compactionCoordinator.run();
                     isEmpty = tasks.isEmpty();
                     tasks.forEach(ctx::collect);
+
+                    if (emitMaxWatermark) {
+                        ctx.emitWatermark(Watermark.MAX_WATERMARK);
+                    }
                 } catch (EndOfScanException esf) {
                     LOG.info("Catching EndOfStreamException, the stream is finished.");
                     return;
@@ -120,12 +132,15 @@ public class BucketUnawareCompactSource extends RichSourceFunction<AppendOnlyCom
             String tableIdentifier) {
         final StreamSource<AppendOnlyCompactionTask, BucketUnawareCompactSource> sourceOperator =
                 new StreamSource<>(source);
-        return new DataStreamSource<>(
-                env,
-                new CompactionTaskTypeInfo(),
-                sourceOperator,
-                false,
-                COMPACTION_COORDINATOR_NAME + " : " + tableIdentifier,
-                streaming ? Boundedness.CONTINUOUS_UNBOUNDED : Boundedness.BOUNDED);
+        return (DataStreamSource<AppendOnlyCompactionTask>)
+                new DataStreamSource<>(
+                                env,
+                                new CompactionTaskTypeInfo(),
+                                sourceOperator,
+                                false,
+                                COMPACTION_COORDINATOR_NAME + " : " + tableIdentifier,
+                                streaming ? Boundedness.CONTINUOUS_UNBOUNDED : Boundedness.BOUNDED)
+                        .setParallelism(1)
+                        .setMaxParallelism(1);
     }
 }

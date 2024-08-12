@@ -135,7 +135,6 @@ public class MonitorFunction extends RichSourceFunction<Split>
             }
 
             // given that the parallelism of the function is 1, we can only have 1 retrieved items.
-
             Preconditions.checkArgument(
                     retrievedStates.size() <= 1,
                     getClass().getSimpleName() + " retrieved invalid state.");
@@ -230,15 +229,20 @@ public class MonitorFunction extends RichSourceFunction<Split>
             TypeInformation<RowData> typeInfo,
             ReadBuilder readBuilder,
             long monitorInterval,
-            boolean emitSnapshotWatermark) {
+            boolean emitSnapshotWatermark,
+            boolean shuffleByPartition) {
         return env.addSource(
                         new MonitorFunction(readBuilder, monitorInterval, emitSnapshotWatermark),
                         name + "-Monitor",
                         new JavaTypeInfo<>(Split.class))
                 .forceNonParallel()
                 .partitionCustom(
-                        (key, numPartitions) ->
-                                ChannelComputer.select(key.f0, key.f1, numPartitions),
+                        (key, numPartitions) -> {
+                            if (shuffleByPartition) {
+                                return ChannelComputer.select(key.f0, key.f1, numPartitions);
+                            }
+                            return ChannelComputer.select(key.f1, numPartitions);
+                        },
                         split -> {
                             DataSplit dataSplit = (DataSplit) split;
                             return Tuple2.of(dataSplit.partition(), dataSplit.bucket());
