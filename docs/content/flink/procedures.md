@@ -51,7 +51,7 @@ All available procedures are listed below.
    <tr>
       <th class="text-left" style="width: 4%">Procedure Name</th>
       <th class="text-left" style="width: 4%">Usage</th>
-      <th class="text-left" style="width: 20%">Explaination</th>
+      <th class="text-left" style="width: 20%">Explanation</th>
       <th class="text-left" style="width: 4%">Example</th>
    </tr>
    </thead>
@@ -127,7 +127,7 @@ All available procedures are listed below.
       <td>
          To delete a tag. Arguments:
             <li>identifier: the target table identifier. Cannot be empty.</li>
-            <li>tagName: name of the tag to be deleted.</li>
+            <li>tagName: name of the tag to be deleted. If you specify multiple tags, delimiter is ','.</li>
       </td>
       <td>
          CALL sys.delete_tag('default.T', 'my_tag')
@@ -174,16 +174,21 @@ All available procedures are listed below.
       <td>remove_orphan_files</td>
       <td>
          CALL [catalog.]sys.remove_orphan_files('identifier')<br/><br/>
-         CALL [catalog.]sys.remove_orphan_files('identifier', 'olderThan')
+         CALL [catalog.]sys.remove_orphan_files('identifier', 'olderThan')<br/><br/>
+         CALL [catalog.]sys.remove_orphan_files('identifier', 'olderThan', 'dryRun')
       </td>
       <td>
          To remove the orphan data files and metadata files. Arguments:
-            <li>identifier: the target table identifier. Cannot be empty.</li>
+            <li>identifier: the target table identifier. Cannot be empty, you can use database_name.* to clean whole database.</li>
             <li>olderThan: to avoid deleting newly written files, this procedure only 
                deletes orphan files older than 1 day by default. This argument can modify the interval.
             </li>
+            <li>dryRun: when true, view only orphan files, don't actually remove files. Default is false.</li>
       </td>
-      <td>CALL remove_orphan_files('default.T', '2023-10-31 12:00:00')</td>
+      <td>CALL remove_orphan_files('default.T', '2023-10-31 12:00:00')<br/><br/>
+          CALL remove_orphan_files('default.*', '2023-10-31 12:00:00')<br/><br/>
+          CALL remove_orphan_files('default.T', '2023-10-31 12:00:00', true)
+      </td>
    </tr>
    <tr>
       <td>reset_consumer</td>
@@ -246,19 +251,22 @@ All available procedures are listed below.
 <tr>
       <td>expire_partitions</td>
       <td>
-         CALL sys.expire_partitions(table, expiration_time, timestamp_formatter)<br/><br/>
+         CALL sys.expire_partitions(table, expiration_time, timestamp_formatter, expire_strategy)<br/><br/>
       </td>
       <td>
          To expire partitions. Argument:
             <li>table: the target table identifier. Cannot be empty.</li>
             <li>expiration_time: the expiration interval of a partition. A partition will be expired if it‘s lifetime is over this value. Partition time is extracted from the partition value.</li>
             <li>timestamp_formatter: the formatter to format timestamp from string.</li>
+            <li>timestamp_pattern: the pattern to get a timestamp from partitions.</li>
+            <li>expire_strategy: specifies the expiration strategy for partition expiration, possible values: 'values-time' or 'update-time' , 'values-time' as default.</li>
       </td>
       <td>
          -- for Flink 1.18<br/><br/>
-         CALL sys.expire_partitions('default.T', '1 d', 'yyyy-MM-dd')<br/><br/>
+         CALL sys.expire_partitions('default.T', '1 d', 'yyyy-MM-dd', '$dt', 'values-time')<br/><br/>
          -- for Flink 1.19 and later<br/><br/>
-         CALL sys.expire_partitions(`table` => 'default.T', expiration_time => '1 d', timestamp_formatter => 'yyyy-MM-dd')<br/><br/>
+         CALL sys.expire_partitions(`table` => 'default.T', expiration_time => '1 d', timestamp_formatter => 'yyyy-MM-dd', expire_strategy => 'values-time')<br/>
+         CALL sys.expire_partitions(`table` => 'default.T', expiration_time => '1 d', timestamp_formatter => 'yyyy-MM-dd HH:mm', timestamp_pattern => '$dt $hm', expire_strategy => 'values-time')<br/><br/>
       </td>
    </tr>
     <tr>
@@ -270,6 +278,8 @@ All available procedures are listed below.
          CALL sys.repair('databaseName')<br/><br/>
          -- repair a table<br/>
          CALL sys.repair('databaseName.tableName')<br/><br/>
+         -- repair database and table in a string if you specify multiple tags, delimiter is ','<br/>
+         CALL sys.repair('databaseName01,database02.tableName01,database03')
       </td>
       <td>
          Synchronize information from the file system to Metastore. Argument:
@@ -295,6 +305,52 @@ All available procedures are listed below.
          -- repair all tables in a specific partition<br/>
          CALL sys.rewrite_file_index('test_db.T', 'pt=a')<br/><br/>
      </td>
+   <tr>
+      <td>create_branch</td>
+      <td>
+         -- based on the specified tag <br/>
+         CALL [catalog.]sys.create_branch('identifier', 'branchName', 'tagName')
+         -- create empty branch <br/>
+         CALL [catalog.]sys.create_branch('identifier', 'branchName')
+      </td>
+      <td>
+         To create a branch based on given tag, or just create empty branch. Arguments:
+            <li>identifier: the target table identifier. Cannot be empty.</li>
+            <li>branchName: name of the new branch.</li>
+            <li>tagName: name of the tag which the new branch is based on.</li>
+      </td>
+      <td>
+         CALL sys.create_branch('default.T', 'branch1', 'tag1')<br/><br/>
+         CALL sys.create_branch('default.T', 'branch1')<br/><br/>
+      </td>
+   </tr>
+   <tr>
+      <td>delete_branch</td>
+      <td>
+         CALL [catalog.]sys.delete_branch('identifier', 'branchName')
+      </td>
+      <td>
+         To delete a branch. Arguments:
+            <li>identifier: the target table identifier. Cannot be empty.</li>
+            <li>branchName: name of the branch to be deleted. If you specify multiple branches, delimiter is ','.</li>
+      </td>
+      <td>
+         CALL sys.delete_branch('default.T', 'branch1')
+      </td>
+   </tr>
+   <tr>
+      <td>fast_forward</td>
+      <td>
+         CALL [catalog.]sys.fast_forward('identifier', 'branchName')
+      </td>
+      <td>
+         To fast_forward a branch to main branch. Arguments:
+            <li>identifier: the target table identifier. Cannot be empty.</li>
+            <li>branchName: name of the branch to be merged.</li>
+      </td>
+      <td>
+         CALL sys.fast_forward('default.T', 'branch1')
+      </td>
    </tr>
    </tbody>
 </table>

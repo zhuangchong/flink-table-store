@@ -38,6 +38,8 @@ import io.debezium.time.MicroTime;
 import io.debezium.time.MicroTimestamp;
 import io.debezium.time.Timestamp;
 import io.debezium.time.ZonedTimestamp;
+import org.apache.avro.Schema;
+import org.apache.avro.generic.GenericRecord;
 import org.apache.avro.LogicalType;
 import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
@@ -364,6 +366,7 @@ public class DebeziumSchemaUtils {
                 return DataTypes.INT();
             case "int64":
                 return DataTypes.BIGINT();
+            case "float":
             case "float32":
             case "float64":
                 return DataTypes.FLOAT();

@@ -24,6 +24,9 @@ import org.apache.paimon.fs.FileIO;
 import org.apache.paimon.fs.FileStatus;
 import org.apache.paimon.fs.Path;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
@@ -47,13 +50,16 @@ import java.util.stream.Collectors;
 import java.util.stream.LongStream;
 
 import static org.apache.paimon.utils.BranchManager.DEFAULT_MAIN_BRANCH;
-import static org.apache.paimon.utils.BranchManager.getBranchPath;
+import static org.apache.paimon.utils.BranchManager.branchNames;
+import static org.apache.paimon.utils.BranchManager.branchPath;
 import static org.apache.paimon.utils.FileUtils.listVersionedFiles;
 
 /** Manager for {@link Snapshot}, providing utility methods related to paths and snapshot hints. */
 public class SnapshotManager implements Serializable {
 
     private static final long serialVersionUID = 1L;
+
+    private static final Logger LOG = LoggerFactory.getLogger(SnapshotManager.class);
 
     private static final String SNAPSHOT_PREFIX = "snapshot-";
     private static final String CHANGELOG_PREFIX = "changelog-";
@@ -89,28 +95,30 @@ public class SnapshotManager implements Serializable {
         return tablePath;
     }
 
+    public String branch() {
+        return branch;
+    }
+
     public Path changelogDirectory() {
-        return new Path(getBranchPath(fileIO, tablePath, branch) + "/changelog");
+        return new Path(branchPath(tablePath, branch) + "/changelog");
     }
 
     public Path longLivedChangelogPath(long snapshotId) {
         return new Path(
-                getBranchPath(fileIO, tablePath, branch)
-                        + "/changelog/"
-                        + CHANGELOG_PREFIX
-                        + snapshotId);
+                branchPath(tablePath, branch) + "/changelog/" + CHANGELOG_PREFIX + snapshotId);
     }
 
     public Path snapshotPath(long snapshotId) {
         return new Path(
-                getBranchPath(fileIO, tablePath, branch)
-                        + "/snapshot/"
-                        + SNAPSHOT_PREFIX
-                        + snapshotId);
+                branchPath(tablePath, branch) + "/snapshot/" + SNAPSHOT_PREFIX + snapshotId);
     }
 
     public Path snapshotDirectory() {
-        return new Path(getBranchPath(fileIO, tablePath, branch) + "/snapshot");
+        return new Path(branchPath(tablePath, branch) + "/snapshot");
+    }
+
+    public static Path snapshotDirectory(Path tablePath, String branch) {
+        return new Path(branchPath(tablePath, branch) + "/snapshot");
     }
 
     public Snapshot snapshot(long snapshotId) {
@@ -267,8 +275,9 @@ public class SnapshotManager implements Serializable {
             return null;
         }
 
-        if (snapshot(earliest).timeMillis() > timestampMills) {
-            return null;
+        Snapshot earliestSnapShot = snapshot(earliest);
+        if (earliestSnapShot.timeMillis() > timestampMills) {
+            return earliestSnapShot;
         }
         Snapshot finalSnapshot = null;
         while (earliest <= latest) {
@@ -291,7 +300,9 @@ public class SnapshotManager implements Serializable {
     public @Nullable Snapshot laterOrEqualWatermark(long watermark) {
         Long earliest = earliestSnapshotId();
         Long latest = latestSnapshotId();
-        if (earliest == null || latest == null) {
+        // If latest == Long.MIN_VALUE don't need next binary search for watermark
+        // which can reduce IO cost with snapshot
+        if (earliest == null || latest == null || snapshot(latest).watermark() == Long.MIN_VALUE) {
             return null;
         }
         Long earliestWatermark = null;
@@ -394,10 +405,24 @@ public class SnapshotManager implements Serializable {
      * be deleted by other processes, so just skip this snapshot.
      */
     public List<Snapshot> safelyGetAllSnapshots() throws IOException {
+        // For main branch
         List<Path> paths =
                 listVersionedFiles(fileIO, snapshotDirectory(), SNAPSHOT_PREFIX)
                         .map(id -> snapshotPath(id))
                         .collect(Collectors.toList());
+
+        // For other branch
+        List<String> allBranchNames = branchNames(fileIO, tablePath);
+        for (String branchName : allBranchNames) {
+            List<Path> branchPaths =
+                    listVersionedFiles(
+                                    fileIO,
+                                    snapshotDirectory(tablePath, branchName),
+                                    SNAPSHOT_PREFIX)
+                            .map(this::snapshotPath)
+                            .collect(Collectors.toList());
+            paths.addAll(branchPaths);
+        }
 
         List<Snapshot> snapshots = new ArrayList<>();
         for (Path path : paths) {
@@ -432,8 +457,23 @@ public class SnapshotManager implements Serializable {
      * Try to get non snapshot files. If any error occurred, just ignore it and return an empty
      * result.
      */
-    public List<Path> tryGetNonSnapshotFiles(Predicate<FileStatus> fileStatusFilter) {
-        return listPathWithFilter(snapshotDirectory(), fileStatusFilter, nonSnapshotFileFilter());
+    public List<Path> tryGetNonSnapshotFiles(Predicate<FileStatus> fileStatusFilter)
+            throws IOException {
+        // For main branch
+        List<Path> nonSnapshotFiles =
+                listPathWithFilter(snapshotDirectory(), fileStatusFilter, nonSnapshotFileFilter());
+
+        // For other branch
+        List<String> allBranchNames = branchNames(fileIO, tablePath);
+        allBranchNames.stream()
+                .map(
+                        branchName ->
+                                listPathWithFilter(
+                                        snapshotDirectory(tablePath, branchName),
+                                        fileStatusFilter,
+                                        nonSnapshotFileFilter()))
+                .forEach(nonSnapshotFiles::addAll);
+        return nonSnapshotFiles;
     }
 
     public List<Path> tryGetNonChangelogFiles(Predicate<FileStatus> fileStatusFilter) {
@@ -488,7 +528,31 @@ public class SnapshotManager implements Serializable {
                         "Latest snapshot id is not null, but earliest snapshot id is null. "
                                 + "This is unexpected.");
         for (long id = latestId; id >= earliestId; id--) {
-            Snapshot snapshot = snapshot(id);
+            Snapshot snapshot;
+            try {
+                snapshot = snapshot(id);
+            } catch (Exception e) {
+                long newEarliestId =
+                        Preconditions.checkNotNull(
+                                earliestSnapshotId(),
+                                "Latest snapshot id is not null, but earliest snapshot id is null. "
+                                        + "This is unexpected.");
+
+                // this is a valid snapshot, should throw exception
+                if (id >= newEarliestId) {
+                    throw e;
+                }
+
+                // this is an expired snapshot
+                LOG.warn(
+                        "Snapshot #"
+                                + id
+                                + " is expired. The latest snapshot of current user("
+                                + user
+                                + ") is not found.");
+                break;
+            }
+
             if (user.equals(snapshot.commitUser())) {
                 return Optional.of(snapshot);
             }
@@ -530,7 +594,7 @@ public class SnapshotManager implements Serializable {
     }
 
     public void commitChangelog(Changelog changelog, long id) throws IOException {
-        fileIO.writeFileUtf8(longLivedChangelogPath(id), changelog.toJson());
+        fileIO.writeFile(longLivedChangelogPath(id), changelog.toJson(), false);
     }
 
     /**
@@ -559,7 +623,7 @@ public class SnapshotManager implements Serializable {
                     return null;
                 }
 
-                // this is a valid snapshot, should not throw exception
+                // this is a valid snapshot, should throw exception
                 if (id >= newEarliestId) {
                     throw e;
                 }
@@ -577,10 +641,6 @@ public class SnapshotManager implements Serializable {
 
     private @Nullable Long findLatest(Path dir, String prefix, Function<Long, Path> file)
             throws IOException {
-        if (!fileIO.exists(dir)) {
-            return null;
-        }
-
         Long snapshotId = readHint(LATEST, dir);
         if (snapshotId != null && snapshotId > 0) {
             long nextSnapshot = snapshotId + 1;
@@ -594,10 +654,6 @@ public class SnapshotManager implements Serializable {
 
     private @Nullable Long findEarliest(Path dir, String prefix, Function<Long, Path> file)
             throws IOException {
-        if (!fileIO.exists(dir)) {
-            return null;
-        }
-
         Long snapshotId = readHint(EARLIEST, dir);
         // null and it is the earliest only it exists
         if (snapshotId != null && fileIO.exists(file.apply(snapshotId))) {
@@ -632,6 +688,42 @@ public class SnapshotManager implements Serializable {
     private Long findByListFiles(BinaryOperator<Long> reducer, Path dir, String prefix)
             throws IOException {
         return listVersionedFiles(fileIO, dir, prefix).reduce(reducer).orElse(null);
+    }
+
+    /**
+     * Find the overlapping snapshots between sortedSnapshots and range of [beginInclusive,
+     * endExclusive).
+     */
+    public static List<Snapshot> findOverlappedSnapshots(
+            List<Snapshot> sortedSnapshots, long beginInclusive, long endExclusive) {
+        List<Snapshot> overlappedSnapshots = new ArrayList<>();
+        int right = findPreviousSnapshot(sortedSnapshots, endExclusive);
+        if (right >= 0) {
+            int left = Math.max(findPreviousOrEqualSnapshot(sortedSnapshots, beginInclusive), 0);
+            for (int i = left; i <= right; i++) {
+                overlappedSnapshots.add(sortedSnapshots.get(i));
+            }
+        }
+        return overlappedSnapshots;
+    }
+
+    public static int findPreviousSnapshot(List<Snapshot> sortedSnapshots, long targetSnapshotId) {
+        for (int i = sortedSnapshots.size() - 1; i >= 0; i--) {
+            if (sortedSnapshots.get(i).id() < targetSnapshotId) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static int findPreviousOrEqualSnapshot(
+            List<Snapshot> sortedSnapshots, long targetSnapshotId) {
+        for (int i = sortedSnapshots.size() - 1; i >= 0; i--) {
+            if (sortedSnapshots.get(i).id() <= targetSnapshotId) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     public void deleteLatestHint() throws IOException {

@@ -92,10 +92,11 @@ public class AppendOnlyTableCompactionCoordinator {
         }
         this.streamingMode = isStreaming;
         CoreOptions coreOptions = table.coreOptions();
-        this.targetFileSize = coreOptions.targetFileSize();
-        this.compactionFileSize = coreOptions.compactionFileSize();
+        this.targetFileSize = coreOptions.targetFileSize(false);
+        this.compactionFileSize = coreOptions.compactionFileSize(false);
         this.minFileNum = coreOptions.compactionMinFileNum();
-        this.maxFileNum = coreOptions.compactionMaxFileNum();
+        // this is global compaction, avoid too many compaction tasks
+        this.maxFileNum = coreOptions.compactionMaxFileNum().orElse(50);
     }
 
     public List<AppendOnlyCompactionTask> run() {

@@ -21,7 +21,8 @@ package org.apache.paimon.operation;
 import org.apache.paimon.Changelog;
 import org.apache.paimon.FileStore;
 import org.apache.paimon.Snapshot;
-import org.apache.paimon.annotation.VisibleForTesting;
+import org.apache.paimon.catalog.Catalog;
+import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.fs.FileIO;
 import org.apache.paimon.fs.FileStatus;
 import org.apache.paimon.fs.Path;
@@ -33,10 +34,13 @@ import org.apache.paimon.manifest.ManifestFile;
 import org.apache.paimon.manifest.ManifestFileMeta;
 import org.apache.paimon.manifest.ManifestList;
 import org.apache.paimon.table.FileStoreTable;
+import org.apache.paimon.table.Table;
 import org.apache.paimon.utils.DateTimeUtils;
-import org.apache.paimon.utils.FileUtils;
 import org.apache.paimon.utils.SnapshotManager;
 import org.apache.paimon.utils.TagManager;
+
+import org.apache.paimon.shade.guava30.com.google.common.collect.Lists;
+import org.apache.paimon.shade.guava30.com.google.common.collect.Sets;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,18 +52,28 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TimeZone;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import static org.apache.paimon.utils.FileStorePathFactory.BUCKET_PATH_PREFIX;
+import static org.apache.paimon.utils.Preconditions.checkArgument;
+import static org.apache.paimon.utils.ThreadPoolUtils.createCachedThreadPool;
+import static org.apache.paimon.utils.ThreadPoolUtils.randomlyExecute;
 
 /**
  * To remove the data files and metadata files that are not used by table (so-called "orphan
@@ -80,8 +94,13 @@ public class OrphanFilesClean {
 
     private static final Logger LOG = LoggerFactory.getLogger(OrphanFilesClean.class);
 
+    private static final ThreadPoolExecutor EXECUTOR =
+            createCachedThreadPool(
+                    Runtime.getRuntime().availableProcessors(), "ORPHAN_FILES_CLEAN");
+
     private static final int READ_FILE_RETRY_NUM = 3;
     private static final int READ_FILE_RETRY_INTERVAL = 5;
+    private static final int SHOW_LIMIT = 200;
 
     private final SnapshotManager snapshotManager;
     private final TagManager tagManager;
@@ -92,10 +111,9 @@ public class OrphanFilesClean {
     private final ManifestFile manifestFile;
     private final IndexFileHandler indexFileHandler;
 
-    // an estimated value of how many files were deleted
-    private int deletedFilesNum = 0;
     private final List<Path> deleteFiles;
     private long olderThanMillis = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(1);
+    private Consumer<Path> fileCleaner;
 
     public OrphanFilesClean(FileStoreTable table) {
         this.snapshotManager = table.snapshotManager();
@@ -109,6 +127,17 @@ public class OrphanFilesClean {
         this.manifestFile = store.manifestFileFactory().create();
         this.indexFileHandler = store.newIndexFileHandler();
         this.deleteFiles = new ArrayList<>();
+        this.fileCleaner =
+                path -> {
+                    try {
+                        if (fileIO.isDir(path)) {
+                            fileIO.deleteDirectoryQuietly(path);
+                        } else {
+                            fileIO.deleteQuietly(path);
+                        }
+                    } catch (IOException ignored) {
+                    }
+                };
     }
 
     public OrphanFilesClean olderThan(String timestamp) {
@@ -119,22 +148,25 @@ public class OrphanFilesClean {
         return this;
     }
 
-    public int clean() throws IOException, ExecutionException, InterruptedException {
+    public OrphanFilesClean fileCleaner(Consumer<Path> fileCleaner) {
+        this.fileCleaner = fileCleaner;
+        return this;
+    }
+
+    public List<Path> clean() throws IOException, ExecutionException, InterruptedException {
         if (snapshotManager.earliestSnapshotId() == null) {
             LOG.info("No snapshot found, skip removing.");
-            return 0;
+            return Collections.emptyList();
         }
 
         // specially handle the snapshot directory
         List<Path> nonSnapshotFiles = snapshotManager.tryGetNonSnapshotFiles(this::oldEnough);
-        nonSnapshotFiles.forEach(this::deleteFileOrDirQuietly);
-        deletedFilesNum += nonSnapshotFiles.size();
+        nonSnapshotFiles.forEach(fileCleaner);
         deleteFiles.addAll(nonSnapshotFiles);
 
         // specially handle the changelog directory
         List<Path> nonChangelogFiles = snapshotManager.tryGetNonChangelogFiles(this::oldEnough);
-        nonChangelogFiles.forEach(this::deleteFileOrDirQuietly);
-        deletedFilesNum += nonChangelogFiles.size();
+        nonChangelogFiles.forEach(fileCleaner);
         deleteFiles.addAll(nonChangelogFiles);
 
         Map<String, Path> candidates = getCandidateDeletingFiles();
@@ -142,19 +174,9 @@ public class OrphanFilesClean {
 
         Set<String> deleted = new HashSet<>(candidates.keySet());
         deleted.removeAll(usedFiles);
+        deleted.stream().map(candidates::get).forEach(fileCleaner);
 
-        for (String file : deleted) {
-            Path path = candidates.get(file);
-            deleteFileOrDirQuietly(path);
-        }
-        deletedFilesNum += deleted.size();
         deleteFiles.addAll(deleted.stream().map(candidates::get).collect(Collectors.toList()));
-
-        return deletedFilesNum;
-    }
-
-    @VisibleForTesting
-    List<Path> getDeleteFiles() {
         return deleteFiles;
     }
 
@@ -166,25 +188,15 @@ public class OrphanFilesClean {
         List<Snapshot> taggedSnapshots = tagManager.taggedSnapshots();
         readSnapshots.addAll(taggedSnapshots);
         readSnapshots.addAll(snapshotManager.safelyGetAllChangelogs());
+        return Sets.newHashSet(randomlyExecute(EXECUTOR, this::getUsedFiles, readSnapshots));
+    }
 
-        return FileUtils.COMMON_IO_FORK_JOIN_POOL
-                .submit(
-                        () ->
-                                readSnapshots
-                                        .parallelStream()
-                                        .flatMap(
-                                                snapshot -> {
-                                                    if (snapshot instanceof Changelog) {
-                                                        return getUsedFilesForChangelog(
-                                                                (Changelog) snapshot)
-                                                                .stream();
-                                                    } else {
-                                                        return getUsedFilesForSnapshot(snapshot)
-                                                                .stream();
-                                                    }
-                                                })
-                                        .collect(Collectors.toSet()))
-                .get();
+    private List<String> getUsedFiles(Snapshot snapshot) {
+        if (snapshot instanceof Changelog) {
+            return getUsedFilesForChangelog((Changelog) snapshot);
+        } else {
+            return getUsedFilesForSnapshot(snapshot);
+        }
     }
 
     /**
@@ -193,22 +205,19 @@ public class OrphanFilesClean {
      */
     private Map<String, Path> getCandidateDeletingFiles() {
         List<Path> fileDirs = listPaimonFileDirs();
-        try {
-            return FileUtils.COMMON_IO_FORK_JOIN_POOL
-                    .submit(
-                            () ->
-                                    fileDirs.parallelStream()
-                                            .flatMap(p -> tryBestListingDirs(p).stream())
-                                            .filter(this::oldEnough)
-                                            .map(FileStatus::getPath)
-                                            .collect(
-                                                    Collectors.toMap(
-                                                            Path::getName, Function.identity())))
-                    .get();
-        } catch (ExecutionException | InterruptedException e) {
-            LOG.debug("Failed to get candidate deleting files.", e);
-            return Collections.emptyMap();
+        Function<Path, List<Path>> processor =
+                path ->
+                        tryBestListingDirs(path).stream()
+                                .filter(this::oldEnough)
+                                .map(FileStatus::getPath)
+                                .collect(Collectors.toList());
+        Iterator<Path> allPaths = randomlyExecute(EXECUTOR, processor, fileDirs);
+        Map<String, Path> result = new HashMap<>();
+        while (allPaths.hasNext()) {
+            Path next = allPaths.next();
+            result.put(next.getName(), next);
         }
+        return result;
     }
 
     private List<String> getUsedFilesForChangelog(Changelog changelog) {
@@ -485,22 +494,8 @@ public class OrphanFilesClean {
                         partitionKeysNum -> level != partitionKeysNum);
 
         // dive into the next partition level
-        try {
-            return FileUtils.COMMON_IO_FORK_JOIN_POOL
-                    .submit(
-                            () ->
-                                    partitionPaths
-                                            .parallelStream()
-                                            .flatMap(
-                                                    p ->
-                                                            listAndCleanDataDirs(p, level - 1)
-                                                                    .stream())
-                                            .collect(Collectors.toList()))
-                    .get();
-        } catch (ExecutionException | InterruptedException e) {
-            LOG.debug("Failed to list partition directory {}", dir, e);
-            return Collections.emptyList();
-        }
+        return Lists.newArrayList(
+                randomlyExecute(EXECUTOR, p -> listAndCleanDataDirs(p, level - 1), partitionPaths));
     }
 
     private List<Path> filterAndCleanDataDirs(
@@ -523,10 +518,9 @@ public class OrphanFilesClean {
                     .map(FileStatus::getPath)
                     .forEach(
                             p -> {
-                                deleteFileOrDirQuietly(p);
+                                fileCleaner.accept(p);
                                 synchronized (deleteFiles) {
                                     deleteFiles.add(p);
-                                    deletedFilesNum++;
                                 }
                             });
         }
@@ -534,21 +528,72 @@ public class OrphanFilesClean {
         return filtered;
     }
 
-    private void deleteFileOrDirQuietly(Path path) {
-        try {
-            if (fileIO.isDir(path)) {
-                fileIO.deleteDirectoryQuietly(path);
-            } else {
-                fileIO.deleteQuietly(path);
-            }
-        } catch (IOException ignored) {
-        }
-    }
-
     /** A helper functional interface for method {@link #retryReadingFiles}. */
     @FunctionalInterface
     private interface ReaderWithIOException<T> {
 
         T read() throws IOException;
+    }
+
+    public static List<String> showDeletedFiles(List<Path> deleteFiles, int showLimit) {
+        int showSize = Math.min(deleteFiles.size(), showLimit);
+        List<String> result = new ArrayList<>();
+        if (deleteFiles.size() > showSize) {
+            result.add(
+                    String.format(
+                            "Total %s files, only %s lines are displayed.",
+                            deleteFiles.size(), showSize));
+        }
+        for (int i = 0; i < showSize; i++) {
+            result.add(deleteFiles.get(i).toUri().getPath());
+        }
+        return result;
+    }
+
+    public static List<OrphanFilesClean> createOrphanFilesCleans(
+            Catalog catalog, String databaseName, @Nullable String tableName)
+            throws Catalog.DatabaseNotExistException, Catalog.TableNotExistException {
+        List<OrphanFilesClean> orphanFilesCleans = new ArrayList<>();
+        List<String> tableNames = Collections.singletonList(tableName);
+        if (tableName == null || "*".equals(tableName)) {
+            tableNames = catalog.listTables(databaseName);
+        }
+
+        for (String t : tableNames) {
+            Identifier identifier = new Identifier(databaseName, t);
+            Table table = catalog.getTable(identifier);
+            checkArgument(
+                    table instanceof FileStoreTable,
+                    "Only FileStoreTable supports remove-orphan-files action. The table type is '%s'.",
+                    table.getClass().getName());
+
+            orphanFilesCleans.add(new OrphanFilesClean((FileStoreTable) table));
+        }
+
+        return orphanFilesCleans;
+    }
+
+    public static String[] executeOrphanFilesClean(List<OrphanFilesClean> tableCleans) {
+        ExecutorService executorService =
+                Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+        List<Future<List<Path>>> tasks = new ArrayList<>();
+        for (OrphanFilesClean clean : tableCleans) {
+            tasks.add(executorService.submit(clean::clean));
+        }
+
+        List<Path> cleanOrphanFiles = new ArrayList<>();
+        for (Future<List<Path>> task : tasks) {
+            try {
+                cleanOrphanFiles.addAll(task.get());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(e);
+            } catch (ExecutionException e) {
+                throw new RuntimeException(e);
+            }
+        }
+
+        executorService.shutdownNow();
+        return showDeletedFiles(cleanOrphanFiles, SHOW_LIMIT).toArray(new String[0]);
     }
 }

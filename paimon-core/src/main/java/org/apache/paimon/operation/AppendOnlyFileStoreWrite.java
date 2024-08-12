@@ -41,11 +41,15 @@ import org.apache.paimon.table.BucketMode;
 import org.apache.paimon.table.source.DataSplit;
 import org.apache.paimon.types.RowType;
 import org.apache.paimon.utils.CommitIncrement;
+import org.apache.paimon.utils.ExceptionUtils;
 import org.apache.paimon.utils.FileStorePathFactory;
 import org.apache.paimon.utils.LongCounter;
 import org.apache.paimon.utils.RecordWriter;
 import org.apache.paimon.utils.SnapshotManager;
 import org.apache.paimon.utils.StatsCollectorFactories;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -57,6 +61,8 @@ import java.util.concurrent.ExecutorService;
 
 /** {@link FileStoreWrite} for {@link AppendOnlyFileStore}. */
 public class AppendOnlyFileStoreWrite extends MemoryFileStoreWrite<InternalRow> {
+
+    private static final Logger LOG = LoggerFactory.getLogger(AppendOnlyFileStoreWrite.class);
 
     private final FileIO fileIO;
     private final RawFileSplitRead read;
@@ -98,9 +104,9 @@ public class AppendOnlyFileStoreWrite extends MemoryFileStoreWrite<InternalRow> 
         this.rowType = rowType;
         this.fileFormat = options.fileFormat();
         this.pathFactory = pathFactory;
-        this.targetFileSize = options.targetFileSize();
+        this.targetFileSize = options.targetFileSize(false);
         this.compactionMinFileNum = options.compactionMinFileNum();
-        this.compactionMaxFileNum = options.compactionMaxFileNum();
+        this.compactionMaxFileNum = options.compactionMaxFileNum().orElse(5);
         this.commitForceCompact = options.commitForceCompact();
         this.skipCompaction = options.writeOnly();
         this.fileCompression = options.fileCompression();
@@ -158,7 +164,8 @@ public class AppendOnlyFileStoreWrite extends MemoryFileStoreWrite<InternalRow> 
                 spillCompression,
                 statsCollectors,
                 maxDiskSize,
-                fileIndexOptions);
+                fileIndexOptions,
+                options.asyncFileWrite());
     }
 
     public AppendOnlyCompactManager.CompactRewriter compactRewriter(
@@ -167,6 +174,7 @@ public class AppendOnlyFileStoreWrite extends MemoryFileStoreWrite<InternalRow> 
             if (toCompact.isEmpty()) {
                 return Collections.emptyList();
             }
+            Exception collectedExceptions = null;
             RowDataRollingFileWriter rewriter =
                     new RowDataRollingFileWriter(
                             fileIO,
@@ -179,11 +187,22 @@ public class AppendOnlyFileStoreWrite extends MemoryFileStoreWrite<InternalRow> 
                             fileCompression,
                             statsCollectors,
                             fileIndexOptions,
-                            FileSource.COMPACT);
+                            FileSource.COMPACT,
+                            options.asyncFileWrite());
             try {
                 rewriter.write(bucketReader(partition, bucket).read(toCompact));
+            } catch (Exception e) {
+                collectedExceptions = e;
             } finally {
-                rewriter.close();
+                try {
+                    rewriter.close();
+                } catch (Exception e) {
+                    collectedExceptions = ExceptionUtils.firstOrSuppressed(e, collectedExceptions);
+                }
+            }
+
+            if (collectedExceptions != null) {
+                throw collectedExceptions;
             }
             return rewriter.result();
         };
@@ -224,7 +243,13 @@ public class AppendOnlyFileStoreWrite extends MemoryFileStoreWrite<InternalRow> 
 
     @Override
     protected void forceBufferSpill() throws Exception {
+        if (ioManager == null) {
+            return;
+        }
         forceBufferSpill = true;
+        LOG.info(
+                "Force buffer spill for append-only file store write, writer number is: {}",
+                writers.size());
         for (Map<Integer, WriterContainer<InternalRow>> bucketWriters : writers.values()) {
             for (WriterContainer<InternalRow> writerContainer : bucketWriters.values()) {
                 ((AppendOnlyWriter) writerContainer.writer).toBufferedWriter();
