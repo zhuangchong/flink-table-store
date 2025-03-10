@@ -18,13 +18,11 @@
 
 package org.apache.paimon.flink.sink.cdc;
 
-import org.apache.paimon.types.DataField;
+import org.apache.paimon.schema.Schema;
 
 import javax.annotation.Nullable;
 
 import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Objects;
 
 /** Compared to {@link CdcMultiplexRecord}, this contains schema information. */
@@ -34,25 +32,17 @@ public class RichCdcMultiplexRecord implements Serializable {
 
     @Nullable private final String databaseName;
     @Nullable private final String tableName;
-    private final List<DataField> fields;
-    private final List<String> primaryKeys;
+    private final Schema schema;
     private final CdcRecord cdcRecord;
 
     public RichCdcMultiplexRecord(
             @Nullable String databaseName,
             @Nullable String tableName,
-            List<DataField> fields,
-            List<String> primaryKeys,
+            @Nullable Schema schema,
             CdcRecord cdcRecord) {
         this.databaseName = databaseName;
         this.tableName = tableName;
-        // This class can not be deserialized by kryoSerializer,
-        // Throw an exception message `com.esotericsoftware.kryo.KryoException:
-        // java.lang.UnsupportedOperationException` ,
-        // because fields and primaryKeys is an
-        // unmodifiableList. So we need to ensure that List is a modifiable list.
-        this.fields = new ArrayList<>(fields);
-        this.primaryKeys = new ArrayList<>(primaryKeys);
+        this.schema = schema == null ? Schema.newBuilder().build() : schema;
         this.cdcRecord = cdcRecord;
     }
 
@@ -66,21 +56,17 @@ public class RichCdcMultiplexRecord implements Serializable {
         return tableName;
     }
 
-    public List<DataField> fields() {
-        return fields;
-    }
-
-    public List<String> primaryKeys() {
-        return primaryKeys;
+    public Schema schema() {
+        return schema;
     }
 
     public RichCdcRecord toRichCdcRecord() {
-        return new RichCdcRecord(cdcRecord, fields);
+        return new RichCdcRecord(cdcRecord, schema);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(databaseName, tableName, fields, primaryKeys, cdcRecord);
+        return Objects.hash(databaseName, tableName, schema, cdcRecord);
     }
 
     @Override
@@ -94,8 +80,7 @@ public class RichCdcMultiplexRecord implements Serializable {
         RichCdcMultiplexRecord that = (RichCdcMultiplexRecord) o;
         return Objects.equals(databaseName, that.databaseName)
                 && Objects.equals(tableName, that.tableName)
-                && Objects.equals(fields, that.fields)
-                && Objects.equals(primaryKeys, that.primaryKeys)
+                && Objects.equals(schema, that.schema)
                 && Objects.equals(cdcRecord, that.cdcRecord);
     }
 
@@ -106,10 +91,8 @@ public class RichCdcMultiplexRecord implements Serializable {
                 + databaseName
                 + ", tableName="
                 + tableName
-                + ", fields="
-                + fields
-                + ", primaryKeys="
-                + primaryKeys
+                + ", schema="
+                + schema
                 + ", cdcRecord="
                 + cdcRecord
                 + '}';

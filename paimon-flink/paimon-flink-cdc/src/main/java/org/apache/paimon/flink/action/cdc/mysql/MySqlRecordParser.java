@@ -26,10 +26,9 @@ import org.apache.paimon.flink.action.cdc.format.debezium.DebeziumSchemaUtils;
 import org.apache.paimon.flink.action.cdc.mysql.format.DebeziumEvent;
 import org.apache.paimon.flink.sink.cdc.CdcRecord;
 import org.apache.paimon.flink.sink.cdc.RichCdcMultiplexRecord;
-import org.apache.paimon.types.DataField;
+import org.apache.paimon.schema.Schema;
 import org.apache.paimon.types.DataType;
 import org.apache.paimon.types.RowKind;
-import org.apache.paimon.types.RowType;
 import org.apache.paimon.utils.JsonSerdeUtil;
 import org.apache.paimon.utils.Preconditions;
 
@@ -165,17 +164,15 @@ public class MySqlRecordParser implements FlatMapFunction<CdcSourceRecord, RichC
 
         Table table = tableChange.getTable();
 
-        List<DataField> fields = extractFields(table);
-        List<String> primaryKeys = table.primaryKeyColumnNames();
+        Schema schema = extractSchema(table);
 
-        // TODO : add table comment and column comment when we upgrade flink cdc to 2.4
         return Collections.singletonList(
                 new RichCdcMultiplexRecord(
-                        databaseName, currentTable, fields, primaryKeys, CdcRecord.emptyRecord()));
+                        databaseName, currentTable, schema, CdcRecord.emptyRecord()));
     }
 
-    private List<DataField> extractFields(Table table) {
-        RowType.Builder rowType = RowType.builder();
+    private Schema extractSchema(Table table) {
+        Schema.Builder schemaBuilder = Schema.newBuilder();
         List<Column> columns = table.columns();
 
         for (Column column : columns) {
@@ -189,12 +186,20 @@ public class MySqlRecordParser implements FlatMapFunction<CdcSourceRecord, RichC
 
             // add column comment when we upgrade flink cdc to 2.4
             if (isDebeziumSchemaCommentsEnabled) {
-                rowType.field(column.name(), dataType, column.comment());
+                schemaBuilder.column(column.name(), dataType, column.comment());
             } else {
-                rowType.field(column.name(), dataType);
+                schemaBuilder.column(column.name(), dataType);
             }
         }
-        return rowType.build().getFields();
+
+        schemaBuilder.primaryKey(table.primaryKeyColumnNames());
+
+        // add table comment when we upgrade flink cdc to 2.4
+        if (isDebeziumSchemaCommentsEnabled) {
+            schemaBuilder.comment(table.comment());
+        }
+
+        return schemaBuilder.build();
     }
 
     private List<RichCdcMultiplexRecord> extractRecords() {
@@ -270,10 +275,6 @@ public class MySqlRecordParser implements FlatMapFunction<CdcSourceRecord, RichC
 
     protected RichCdcMultiplexRecord createRecord(RowKind rowKind, Map<String, String> data) {
         return new RichCdcMultiplexRecord(
-                databaseName,
-                currentTable,
-                Collections.emptyList(),
-                Collections.emptyList(),
-                new CdcRecord(rowKind, data));
+                databaseName, currentTable, null, new CdcRecord(rowKind, data));
     }
 }

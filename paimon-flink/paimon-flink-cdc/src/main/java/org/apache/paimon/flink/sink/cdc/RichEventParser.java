@@ -40,7 +40,8 @@ public class RichEventParser implements EventParser<RichCdcRecord> {
     @Override
     public List<DataField> parseSchemaChange() {
         List<DataField> change = new ArrayList<>();
-        record.fields()
+        record.schema()
+                .fields()
                 .forEach(
                         dataField -> {
                             DataField previous = previousDataFields.get(dataField.name());

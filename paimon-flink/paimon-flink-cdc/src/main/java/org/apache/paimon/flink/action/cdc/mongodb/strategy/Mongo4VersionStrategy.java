@@ -21,9 +21,8 @@ package org.apache.paimon.flink.action.cdc.mongodb.strategy;
 import org.apache.paimon.flink.action.cdc.ComputedColumn;
 import org.apache.paimon.flink.sink.cdc.CdcRecord;
 import org.apache.paimon.flink.sink.cdc.RichCdcMultiplexRecord;
-import org.apache.paimon.types.DataField;
+import org.apache.paimon.schema.Schema;
 import org.apache.paimon.types.RowKind;
-import org.apache.paimon.types.RowType;
 
 import org.apache.paimon.shade.jackson2.com.fasterxml.jackson.core.JsonProcessingException;
 import org.apache.paimon.shade.jackson2.com.fasterxml.jackson.databind.JsonNode;
@@ -123,16 +122,11 @@ public class Mongo4VersionStrategy implements MongoVersionStrategy {
      */
     private RichCdcMultiplexRecord processRecord(JsonNode fullDocument, RowKind rowKind)
             throws JsonProcessingException {
-        RowType.Builder rowTypeBuilder = RowType.builder();
+        Schema.Builder schemaBuilder = Schema.newBuilder();
         Map<String, String> record =
-                getExtractRow(fullDocument, rowTypeBuilder, computedColumns, mongodbConfig);
-        List<DataField> fields = rowTypeBuilder.build().getFields();
-
+                getExtractRow(fullDocument, schemaBuilder, computedColumns, mongodbConfig);
+        schemaBuilder.primaryKey(extractPrimaryKeys());
         return new RichCdcMultiplexRecord(
-                databaseName,
-                collection,
-                fields,
-                extractPrimaryKeys(),
-                new CdcRecord(rowKind, record));
+                databaseName, collection, schemaBuilder.build(), new CdcRecord(rowKind, record));
     }
 }
