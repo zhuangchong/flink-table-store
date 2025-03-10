@@ -92,8 +92,9 @@ public class MySqlSyncTableActionITCase extends MySqlActionITCaseBase {
 
         Schema excepted =
                 Schema.newBuilder()
+                        .comment("")
                         .column("pt", DataTypes.INT().notNull(), "primary")
-                        .column("_id", DataTypes.INT().notNull(), "primary")
+                        .column("_id", DataTypes.INT().notNull(), "_id")
                         .column("v1", DataTypes.VARCHAR(10), "v1")
                         .build();
         checkTableSchema(excepted);
@@ -266,6 +267,7 @@ public class MySqlSyncTableActionITCase extends MySqlActionITCaseBase {
 
         Schema excepted =
                 Schema.newBuilder()
+                        .comment("")
                         .column("_id", DataTypes.INT().notNull(), "primary")
                         .column("v1", DataTypes.VARCHAR(10), "v1")
                         .column("v2", DataTypes.INT(), "v2")
