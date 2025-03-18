@@ -72,8 +72,8 @@ public class PartialUpdateMergeFunction implements MergeFunction<KeyValue> {
     private final Map<Integer, FieldsComparator> fieldSeqComparators;
     private final boolean fieldSequenceEnabled;
     private final Map<Integer, FieldAggregator> fieldAggregators;
-    private final boolean removeRecordOnDelete;
-    private final Set<Integer> sequenceGroupPartialDelete;
+    private final boolean enableDelete;
+    private final int[] enableDeleteBySequenceFields;
     private final boolean[] nullables;
 
     private InternalRow currentKey;
@@ -95,16 +95,16 @@ public class PartialUpdateMergeFunction implements MergeFunction<KeyValue> {
             Map<Integer, FieldsComparator> fieldSeqComparators,
             Map<Integer, FieldAggregator> fieldAggregators,
             boolean fieldSequenceEnabled,
-            boolean removeRecordOnDelete,
-            Set<Integer> sequenceGroupPartialDelete,
+            boolean enableDelete,
+            int[] enableDeleteBySequenceFields,
             boolean[] nullables) {
         this.getters = getters;
         this.ignoreDelete = ignoreDelete;
         this.fieldSeqComparators = fieldSeqComparators;
         this.fieldAggregators = fieldAggregators;
         this.fieldSequenceEnabled = fieldSequenceEnabled;
-        this.removeRecordOnDelete = removeRecordOnDelete;
-        this.sequenceGroupPartialDelete = sequenceGroupPartialDelete;
+        this.enableDelete = enableDelete;
+        this.enableDeleteBySequenceFields = enableDeleteBySequenceFields;
         this.nullables = nullables;
     }
 
@@ -142,7 +142,7 @@ public class PartialUpdateMergeFunction implements MergeFunction<KeyValue> {
                 return;
             }
 
-            if (removeRecordOnDelete) {
+            if (enableDelete) {
                 if (kv.valueKind() == RowKind.DELETE) {
                     currentDeleteRow = true;
                     row = new GenericRow(getters.length);
@@ -256,7 +256,8 @@ public class PartialUpdateMergeFunction implements MergeFunction<KeyValue> {
                         for (int field : seqComparator.compareFields()) {
                             if (!updatedSequenceFields.contains(field)) {
                                 if (kv.valueKind() == RowKind.DELETE
-                                        && sequenceGroupPartialDelete.contains(field)) {
+                                        && org.apache.commons.lang3.ArrayUtils.contains(
+                                                enableDeleteBySequenceFields, field)) {
                                     currentDeleteRow = true;
                                     row = new GenericRow(getters.length);
                                     initRow(row, kv.value());
@@ -328,7 +329,6 @@ public class PartialUpdateMergeFunction implements MergeFunction<KeyValue> {
 
         private static final long serialVersionUID = 1L;
 
-        private final boolean ignoreDelete;
         private final RowType rowType;
 
         private final List<DataType> tableTypes;
@@ -337,29 +337,25 @@ public class PartialUpdateMergeFunction implements MergeFunction<KeyValue> {
 
         private final Map<Integer, Supplier<FieldAggregator>> fieldAggregators;
 
-        private final boolean removeRecordOnDelete;
+        private final boolean ignoreDelete;
 
-        private final String removeRecordOnSequenceGroup;
+        private final boolean enableDelete;
 
-        private Set<Integer> sequenceGroupPartialDelete;
+        private int[] enableDeleteBySequenceFields;
 
         private Factory(Options options, RowType rowType, List<String> primaryKeys) {
             this.ignoreDelete = options.get(CoreOptions.IGNORE_DELETE);
             this.rowType = rowType;
             this.tableTypes = rowType.getFieldTypes();
-            this.removeRecordOnSequenceGroup =
-                    options.get(PARTIAL_UPDATE_REMOVE_RECORD_ON_SEQUENCE_GROUP);
-            this.sequenceGroupPartialDelete = new HashSet<>();
 
             List<String> fieldNames = rowType.getFieldNames();
             this.fieldSeqComparators = new HashMap<>();
-            Map<String, Integer> sequenceGroupMap = new HashMap<>();
-            List<String> allSequenceFields = new ArrayList<>();
+            int[] allSequenceFields = null;
             for (Map.Entry<String, String> entry : options.toMap().entrySet()) {
                 String k = entry.getKey();
                 String v = entry.getValue();
                 if (k.startsWith(FIELDS_PREFIX) && k.endsWith(SEQUENCE_GROUP)) {
-                    List<String> sequenceFields =
+                    int[] sequenceFields =
                             Arrays.stream(
                                             k.substring(
                                                             FIELDS_PREFIX.length() + 1,
@@ -367,67 +363,71 @@ public class PartialUpdateMergeFunction implements MergeFunction<KeyValue> {
                                                                     - SEQUENCE_GROUP.length()
                                                                     - 1)
                                                     .split(FIELDS_SEPARATOR))
-                                    .map(fieldName -> validateFieldName(fieldName, fieldNames))
-                                    .collect(Collectors.toList());
-                    allSequenceFields.addAll(sequenceFields);
-
+                                    .mapToInt(fieldName -> validateField(fieldName, fieldNames))
+                                    .toArray();
+                    allSequenceFields = sequenceFields;
                     Supplier<FieldsComparator> userDefinedSeqComparator =
                             () -> UserDefinedSeqComparator.create(rowType, sequenceFields, true);
                     Arrays.stream(v.split(FIELDS_SEPARATOR))
-                            .map(
-                                    fieldName ->
-                                            fieldNames.indexOf(
-                                                    validateFieldName(fieldName, fieldNames)))
+                            .map(fieldName -> validateField(fieldName, fieldNames))
                             .forEach(
-                                    field -> {
-                                        if (fieldSeqComparators.containsKey(field)) {
+                                    fieldIndex -> {
+                                        if (fieldSeqComparators.containsKey(fieldIndex)) {
                                             throw new IllegalArgumentException(
                                                     String.format(
                                                             "Field %s is defined repeatedly by multiple groups: %s",
-                                                            fieldNames.get(field), k));
+                                                            fieldNames.get(fieldIndex), k));
                                         }
-                                        fieldSeqComparators.put(field, userDefinedSeqComparator);
+                                        fieldSeqComparators.put(
+                                                fieldIndex, userDefinedSeqComparator);
                                     });
 
                     // add self
-                    sequenceFields.forEach(
-                            fieldName -> {
-                                int index = fieldNames.indexOf(fieldName);
-                                fieldSeqComparators.put(index, userDefinedSeqComparator);
-                                sequenceGroupMap.put(fieldName, index);
-                            });
+                    Arrays.stream(sequenceFields)
+                            .forEach(
+                                    fieldIndex ->
+                                            fieldSeqComparators.put(
+                                                    fieldIndex, userDefinedSeqComparator));
                 }
             }
             this.fieldAggregators =
                     createFieldAggregators(
                             rowType, primaryKeys, allSequenceFields, new CoreOptions(options));
 
-            removeRecordOnDelete = options.get(PARTIAL_UPDATE_REMOVE_RECORD_ON_DELETE);
+            enableDelete = options.get(PARTIAL_UPDATE_REMOVE_RECORD_ON_DELETE);
 
             Preconditions.checkState(
-                    !(removeRecordOnDelete && ignoreDelete),
+                    !(enableDelete && ignoreDelete),
                     String.format(
                             "%s and %s have conflicting behavior so should not be enabled at the same time.",
                             CoreOptions.IGNORE_DELETE, PARTIAL_UPDATE_REMOVE_RECORD_ON_DELETE));
             Preconditions.checkState(
-                    !removeRecordOnDelete || fieldSeqComparators.isEmpty(),
+                    !enableDelete || fieldSeqComparators.isEmpty(),
                     String.format(
                             "sequence group and %s have conflicting behavior so should not be enabled at the same time.",
                             PARTIAL_UPDATE_REMOVE_RECORD_ON_DELETE));
 
-            if (removeRecordOnSequenceGroup != null) {
-                String[] sequenceGroupArr = removeRecordOnSequenceGroup.split(FIELDS_SEPARATOR);
+            String enableDeleteBySequenceFieldOption =
+                    options.get(PARTIAL_UPDATE_REMOVE_RECORD_ON_SEQUENCE_GROUP);
+
+            if (enableDeleteBySequenceFieldOption != null) {
+                enableDeleteBySequenceFields =
+                        Arrays.stream(enableDeleteBySequenceFieldOption.split(FIELDS_SEPARATOR))
+                                .mapToInt(fieldName -> validateField(fieldName, fieldNames))
+                                .toArray();
                 Preconditions.checkState(
-                        sequenceGroupMap.keySet().containsAll(Arrays.asList(sequenceGroupArr)),
+                        allSequenceFields != null
+                                && Arrays.stream(allSequenceFields)
+                                        .boxed()
+                                        .collect(Collectors.toSet())
+                                        .containsAll(
+                                                Arrays.stream(enableDeleteBySequenceFields)
+                                                        .boxed()
+                                                        .collect(Collectors.toSet())),
                         String.format(
                                 "field '%s' defined in '%s' option must be part of sequence groups",
-                                removeRecordOnSequenceGroup,
+                                enableDeleteBySequenceFieldOption,
                                 PARTIAL_UPDATE_REMOVE_RECORD_ON_SEQUENCE_GROUP.key()));
-                sequenceGroupPartialDelete =
-                        Arrays.stream(sequenceGroupArr)
-                                .filter(sequenceGroupMap::containsKey)
-                                .map(sequenceGroupMap::get)
-                                .collect(Collectors.toSet());
             }
         }
 
@@ -490,8 +490,8 @@ public class PartialUpdateMergeFunction implements MergeFunction<KeyValue> {
                         projectedSeqComparators,
                         projectedAggregators,
                         !fieldSeqComparators.isEmpty(),
-                        removeRecordOnDelete,
-                        sequenceGroupPartialDelete,
+                        enableDelete,
+                        enableDeleteBySequenceFields,
                         ArrayUtils.toPrimitiveBoolean(
                                 projectedTypes.stream()
                                         .map(DataType::isNullable)
@@ -509,8 +509,8 @@ public class PartialUpdateMergeFunction implements MergeFunction<KeyValue> {
                         fieldSeqComparators,
                         fieldAggregators,
                         !fieldSeqComparators.isEmpty(),
-                        removeRecordOnDelete,
-                        sequenceGroupPartialDelete,
+                        enableDelete,
+                        enableDeleteBySequenceFields,
                         ArrayUtils.toPrimitiveBoolean(
                                 rowType.getFieldTypes().stream()
                                         .map(DataType::isNullable)
@@ -556,14 +556,14 @@ public class PartialUpdateMergeFunction implements MergeFunction<KeyValue> {
             return new AdjustedProjection(pushDown, outer);
         }
 
-        private String validateFieldName(String fieldName, List<String> fieldNames) {
-            int field = fieldNames.indexOf(fieldName);
-            if (field == -1) {
+        private int validateField(String fieldName, List<String> fieldNames) {
+            int index = fieldNames.indexOf(fieldName);
+            if (index == -1) {
                 throw new IllegalArgumentException(
                         String.format("Field %s can not be found in table schema", fieldName));
             }
 
-            return fieldName;
+            return index;
         }
 
         /**
@@ -574,7 +574,7 @@ public class PartialUpdateMergeFunction implements MergeFunction<KeyValue> {
         private Map<Integer, Supplier<FieldAggregator>> createFieldAggregators(
                 RowType rowType,
                 List<String> primaryKeys,
-                List<String> allSequenceFields,
+                int[] sequenceFields,
                 CoreOptions options) {
 
             List<String> fieldNames = rowType.getFieldNames();
@@ -584,7 +584,7 @@ public class PartialUpdateMergeFunction implements MergeFunction<KeyValue> {
                 String fieldName = fieldNames.get(i);
                 DataType fieldType = fieldTypes.get(i);
 
-                if (allSequenceFields.contains(fieldName)) {
+                if (org.apache.commons.lang3.ArrayUtils.contains(sequenceFields, i)) {
                     // no agg for sequence fields
                     continue;
                 }
